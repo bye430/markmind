@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MarkMind — Markdown 脑图</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <div class="toolbar-left">
+        <span class="logo">◎ MarkMind</span>
+        <div class="separator"></div>
+        <button id="btn-center" title="居中视图">⌖ 居中</button>
+        <button id="btn-fit" title="适应画布">⊞ 适应</button>
+        <button id="btn-collapse-all" title="全部折叠">▬ 折叠</button>
+        <button id="btn-expand-all" title="全部展开">▤ 展开</button>
+        <div class="separator"></div>
+        <select id="theme-select" title="主题">
+          <option value="default">默认主题</option>
+          <option value="ocean">海洋蓝</option>
+          <option value="forest">森林绿</option>
+          <option value="sunset">日落橙</option>
+          <option value="mono">黑白极简</option>
+        </select>
+        <select id="layout-select" title="布局方向">
+          <option value="right">向右展开</option>
+          <option value="mind-map">左右分布</option>
+          <option value="down">向下展开</option>
+        </select>
+        <div class="separator"></div>
+        <button id="btn-canvas-mode" title="切换画布模式：拖拽定位 / 框选">▣ 框选</button>
+      </div>
+      <div class="toolbar-right">
+        <button id="btn-toggle-editor" type="button" title="显示/隐藏编辑器 (Ctrl+E)">◐</button>
+        <div class="toolbar-menu-wrap">
+          <button id="btn-menu" type="button" title="菜单">☰</button>
+          <div id="toolbar-menu-dropdown" class="toolbar-menu-dropdown" aria-hidden="true">
+            <div class="toolbar-menu-parent-wrap">
+              <span class="toolbar-menu-parent">文件</span>
+              <div class="toolbar-menu-submenu">
+                <button type="button" class="toolbar-menu-item" data-action="open">打开 <span class="menu-shortcut">Ctrl+O</span></button>
+                <button type="button" class="toolbar-menu-item" data-action="save">保存 <span class="menu-shortcut">Ctrl+S</span></button>
+                <button type="button" class="toolbar-menu-item" data-action="saveAs">另存为</button>
+              </div>
+            </div>
+            <div class="toolbar-menu-parent-wrap">
+              <span class="toolbar-menu-parent">编辑</span>
+              <div class="toolbar-menu-submenu">
+                <button type="button" class="toolbar-menu-item" data-action="undo">撤销 <span class="menu-shortcut">Ctrl+Z</span></button>
+                <button type="button" class="toolbar-menu-item" data-action="redo">恢复 <span class="menu-shortcut">Ctrl+Y</span></button>
+              </div>
+            </div>
+            <button type="button" class="toolbar-menu-item" data-action="clearCache">清空缓存</button>
+            <button type="button" class="toolbar-menu-item" data-action="exportSvg">导出 SVG</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div id="workspace">
+      <div id="editor-panel">
+        <textarea id="md-editor" spellcheck="false" placeholder="在此输入 Markdown...
+
+# 中心主题
+
+## 分支一
+### 子节点 1.1
+### 子节点 1.2
+
+## 分支二
+### 子节点 2.1
+"></textarea>
+      </div>
+      <div id="resizer"></div>
+      <div id="canvas-panel">
+        <svg id="mindmap-svg"></svg>
+        <div id="minimap-container">
+          <canvas id="minimap" width="180" height="120"></canvas>
+          <div id="minimap-viewport"></div>
+          <button id="minimap-toggle" type="button" title="收起小地图" aria-label="收起小地图">−</button>
+        </div>
+        <div id="zoom-info"></div>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="file-input" accept=".md,.markdown,.txt" style="display:none">
+
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="parser.js"></script>
+  <script src="layout.js"></script>
+  <script src="renderer.js"></script>
+  <script src="interactions.js"></script>
+  <script src="canvas-editor.js"></script>
+  <script src="undo-manager.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
