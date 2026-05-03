@@ -249,8 +249,12 @@ const Interactions = (() => {
 
     window.addEventListener('mousemove', (e) => {
       if (!isResizing) return;
-      const newWidth = Math.max(240, Math.min(600, e.clientX));
-      editorPanel.style.width = newWidth + 'px';
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1200;
+      const minWidth = 160;
+      const maxWidth = Math.max(minWidth + 200, viewportWidth - 160);
+      const raw = e.clientX;
+      const clamped = Math.max(minWidth, Math.min(maxWidth, raw));
+      editorPanel.style.width = clamped + 'px';
     });
 
     window.addEventListener('mouseup', () => {

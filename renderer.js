@@ -19,6 +19,7 @@ const Renderer = (() => {
   let _onNodeDblClick = null;
   let _onNodeToggle = null;
   let _onNodeMouseDown = null;
+  let _onBodyToggle = null;
 
   function init(svgElement) {
     _svg = svgElement;
@@ -43,11 +44,12 @@ const Renderer = (() => {
     _direction = dir;
   }
 
-  function setCallbacks({ onClick, onDblClick, onToggle, onMouseDown }) {
+  function setCallbacks({ onClick, onDblClick, onToggle, onMouseDown, onBodyToggle }) {
     _onNodeClick = onClick;
     _onNodeDblClick = onDblClick;
     _onNodeToggle = onToggle || null;
     _onNodeMouseDown = onMouseDown || null;
+    _onBodyToggle = onBodyToggle || null;
   }
 
   function createSvgEl(tag, attrs = {}) {
@@ -128,9 +130,21 @@ const Renderer = (() => {
     }
   }
 
+  function depthClassName(depth) {
+    return depth === 0 ? 'depth-0'
+      : depth === 1 ? 'depth-1'
+      : depth === 2 ? 'depth-2'
+      : 'depth-leaf';
+  }
+
   function createNodeElement(node) {
     const g = createSvgEl('g', {
-      class: `mm-node depth-${node.depth <= 2 ? node.depth : 'leaf'}${node.collapsed ? ' collapsed' : ''}`,
+      class: [
+        'mm-node',
+        depthClassName(node.depth),
+        node.collapsed ? 'collapsed' : '',
+        node.bodyExpanded ? 'body-expanded' : '',
+      ].filter(Boolean).join(' '),
       'data-id': node.id,
       transform: `translate(${node.x}, ${node.y})`,
     });
@@ -173,6 +187,7 @@ const Renderer = (() => {
       g.appendChild(badge);
     }
 
+    /* ---- Collapse / expand children button (right side) ---- */
     if (node.children.length > 0) {
       const toggleSize = 14;
       const toggleX = _direction === 'left' || node._direction === 'left'
@@ -234,6 +249,14 @@ const Renderer = (() => {
       });
     }
 
+    /* ---- Body expand / collapse button + body card ---- */
+    if (node.body && node.body.length > 0) {
+      _appendBodyButton(g, node);
+      if (node.bodyExpanded) {
+        _appendBodyCard(g, node);
+      }
+    }
+
     g.addEventListener('dragstart', (e) => {
       e.preventDefault();
     });
@@ -254,9 +277,114 @@ const Renderer = (() => {
     return g;
   }
 
+  /**
+   * Render the small "open / close body" button at the bottom-right corner of
+   * the node. It sits inside the node rectangle so it does not collide with
+   * the children-collapse button.
+   */
+  function _appendBodyButton(g, node) {
+    const btnSize = 16;
+    const btnX = node.width - btnSize - 4;
+    const btnY = node.height - btnSize - 4;
+
+    const btnG = createSvgEl('g', {
+      class: 'mm-body-toggle',
+      transform: `translate(${btnX}, ${btnY})`,
+      cursor: 'pointer',
+    });
+
+    const bg = createSvgEl('rect', {
+      class: 'mm-body-toggle-bg',
+      x: 0, y: 0,
+      width: btnSize, height: btnSize,
+      rx: 4, ry: 4,
+    });
+    btnG.appendChild(bg);
+
+    const icon = createSvgEl('text', {
+      class: 'mm-body-toggle-icon',
+      x: btnSize / 2,
+      y: btnSize / 2 + 0.5,
+      'text-anchor': 'middle',
+      'dominant-baseline': 'central',
+      'font-size': 11,
+    });
+    icon.textContent = node.bodyExpanded ? '▾' : '▸';
+    btnG.appendChild(icon);
+
+    btnG.setAttribute('aria-label', node.bodyExpanded ? '收起正文' : '展开正文');
+
+    const summary = (typeof NodeBodyRenderer !== 'undefined')
+      ? NodeBodyRenderer.summarize(node.body) : '';
+    const title = createSvgEl('title');
+    title.textContent = (node.bodyExpanded ? '收起正文 ' : '展开正文 ') + (summary ? '· ' + summary : '');
+    btnG.appendChild(title);
+
+    btnG.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (_onBodyToggle) _onBodyToggle(node, e);
+    });
+    btnG.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+    });
+
+    g.appendChild(btnG);
+  }
+
+  /**
+   * Render the expanded body card just below the node rectangle.
+   * Uses a foreignObject so we can leverage HTML rendering for lists, code,
+   * and paragraphs (with proper line wrapping & syntax highlighting).
+   */
+  function _appendBodyCard(g, node) {
+    const w = node._bodyWidth || LayoutEngine.DEFAULTS.bodyMinWidth;
+    const h = node._bodyHeight || 60;
+    const gap = LayoutEngine.DEFAULTS.bodyGap;
+    const x = 0;
+    const y = node.height + gap;
+
+    const fo = createSvgEl('foreignObject', {
+      class: 'mm-body-card-fo',
+      x, y,
+      width: w,
+      height: h,
+    });
+
+    const card = document.createElement('div');
+    card.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+    card.className = 'mm-body-card';
+    card.style.cssText =
+      `width:${w}px;height:${h}px;` +
+      'box-sizing:border-box;' +
+      'overflow:hidden;';
+
+    if (typeof NodeBodyRenderer !== 'undefined') {
+      card.innerHTML = NodeBodyRenderer.renderToHtml(node.body);
+    } else {
+      card.textContent = '(NodeBodyRenderer 未加载)';
+    }
+
+    card.addEventListener('mousedown', (e) => e.stopPropagation());
+    card.addEventListener('click', (e) => e.stopPropagation());
+    card.addEventListener('dblclick', (e) => e.stopPropagation());
+    card.addEventListener('wheel', (e) => {
+      // Allow scrolling inside the card without panning the canvas.
+      if (card.scrollHeight > card.clientHeight) {
+        e.stopPropagation();
+      }
+    }, { passive: true });
+
+    fo.appendChild(card);
+    g.appendChild(fo);
+  }
+
   function updateNodeElement(el, node, animate) {
-    const depthClass = node.depth <= 2 ? `depth-${node.depth}` : 'depth-leaf';
-    el.setAttribute('class', `mm-node ${depthClass}${node.collapsed ? ' collapsed' : ''}`);
+    el.setAttribute('class', [
+      'mm-node',
+      depthClassName(node.depth),
+      node.collapsed ? 'collapsed' : '',
+      node.bodyExpanded ? 'body-expanded' : '',
+    ].filter(Boolean).join(' '));
 
     const targetTransform = `translate(${node.x}, ${node.y})`;
 
@@ -284,11 +412,33 @@ const Renderer = (() => {
       underline.setAttribute('x2', node.width - 6);
     }
 
-    const oldFo = el.querySelector('.mm-node-fo');
-    const oldText = el.querySelector('.mm-node-text');
+    const oldFo = el.querySelector(':scope > .mm-node-fo');
+    const oldText = el.querySelector(':scope > .mm-node-text');
     if (oldFo) oldFo.remove();
     if (oldText) oldText.remove();
-    el.appendChild(_createTextFO(node));
+    // Re-insert the text foreign object before any body-related elements so
+    // it stays right above the node rectangle.
+    const firstAfterRect = el.querySelector('.mm-toggle-bg, .mm-body-toggle, .mm-body-card-fo, .collapse-indicator');
+    const newFO = _createTextFO(node);
+    if (firstAfterRect) {
+      el.insertBefore(newFO, firstAfterRect);
+    } else {
+      el.appendChild(newFO);
+    }
+
+    /* ---- body button ---- */
+    const oldBodyBtn = el.querySelector('.mm-body-toggle');
+    if (oldBodyBtn) oldBodyBtn.remove();
+    if (node.body && node.body.length > 0) {
+      _appendBodyButton(el, node);
+    }
+
+    /* ---- body card ---- */
+    const oldCard = el.querySelector('.mm-body-card-fo');
+    if (oldCard) oldCard.remove();
+    if (node.body && node.body.length > 0 && node.bodyExpanded) {
+      _appendBodyCard(el, node);
+    }
   }
 
   function animateTransform(el, targetTransform) {
@@ -401,8 +551,9 @@ const Renderer = (() => {
   }
 
   function _createTextFO(node) {
-    const fontSize = LayoutEngine.DEFAULTS.fontSize[Math.min(node.depth, 3)];
-    const fontWeight = LayoutEngine.DEFAULTS.fontWeight[Math.min(node.depth, 3)];
+    const cfg = LayoutEngine.getCanvasFontConfig();
+    const fontSize = cfg.fontSize[Math.min(node.depth, 3)];
+    const fontWeight = cfg.fontWeight[Math.min(node.depth, 3)];
     const padH = node.depth === 0 ? LayoutEngine.DEFAULTS.rootPadH : LayoutEngine.DEFAULTS.nodePadH;
 
     const fo = createSvgEl('foreignObject', {
@@ -429,7 +580,7 @@ const Renderer = (() => {
     const ws = node._wrapped ? 'normal' : 'nowrap';
     inner.style.cssText =
       `font-size:${fontSize}px;font-weight:${fontWeight};` +
-      `font-family:${LayoutEngine.FONT_FAMILY};line-height:1.45;` +
+      `font-family:${cfg.fontFamily};line-height:1.45;` +
       `max-width:${node.width - padH * 2}px;` +
       `white-space:${ws};overflow-wrap:break-word;` +
       'text-align:center;';
@@ -610,7 +761,8 @@ const Renderer = (() => {
       ghostGroup.appendChild(ul);
     }
 
-    const fontSize = LayoutEngine.DEFAULTS.fontSize[Math.min(draggedNode.depth, 3)] * 0.7;
+    const dragCfg = LayoutEngine.getCanvasFontConfig();
+    const fontSize = dragCfg.fontSize[Math.min(draggedNode.depth, 3)] * 0.7;
     const plainText = draggedNode.text.replace(/\*{1,3}(.+?)\*{1,3}/g, '$1').replace(/`([^`]+)`/g, '$1');
     const label = truncateText(plainText, ghostW - 12, fontSize);
     const text = createSvgEl('text', {

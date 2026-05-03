@@ -1,40 +1,17 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="vivid-red">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MarkMind — Markdown 脑图</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/atom-one-dark.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="app">
     <header id="toolbar">
       <div class="toolbar-left">
-        <span class="logo">◎ MarkMind</span>
-        <div class="separator"></div>
-        <button id="btn-center" title="居中视图">⌖ 居中</button>
-        <button id="btn-fit" title="适应画布">⊞ 适应</button>
-        <button id="btn-collapse-all" title="全部折叠">▬ 折叠</button>
-        <button id="btn-expand-all" title="全部展开">▤ 展开</button>
-        <div class="separator"></div>
-        <select id="theme-select" title="主题">
-          <option value="default">默认主题</option>
-          <option value="ocean">海洋蓝</option>
-          <option value="forest">森林绿</option>
-          <option value="sunset">日落橙</option>
-          <option value="mono">黑白极简</option>
-        </select>
-        <select id="layout-select" title="布局方向">
-          <option value="right">向右展开</option>
-          <option value="mind-map">左右分布</option>
-          <option value="down">向下展开</option>
-        </select>
-        <div class="separator"></div>
-        <button id="btn-canvas-mode" title="切换画布模式：拖拽定位 / 框选">▣ 框选</button>
-      </div>
-      <div class="toolbar-right">
-        <button id="btn-toggle-editor" type="button" title="显示/隐藏编辑器 (Ctrl+E)">◐</button>
         <div class="toolbar-menu-wrap">
           <button id="btn-menu" type="button" title="菜单">☰</button>
           <div id="toolbar-menu-dropdown" class="toolbar-menu-dropdown" aria-hidden="true">
@@ -53,10 +30,81 @@
                 <button type="button" class="toolbar-menu-item" data-action="redo">恢复 <span class="menu-shortcut">Ctrl+Y</span></button>
               </div>
             </div>
-            <button type="button" class="toolbar-menu-item" data-action="clearCache">清空缓存</button>
-            <button type="button" class="toolbar-menu-item" data-action="exportSvg">导出 SVG</button>
+            <div class="toolbar-menu-parent-wrap">
+              <span class="toolbar-menu-parent">视图</span>
+              <div class="toolbar-menu-submenu">
+                <button type="button" class="toolbar-menu-item" data-action="centerView">居中根节点</button>
+                <button type="button" class="toolbar-menu-item" data-action="fitView">适应画布</button>
+                <button type="button" class="toolbar-menu-item" data-action="collapseAll">全部折叠</button>
+                <button type="button" class="toolbar-menu-item" data-action="expandAll">全部展开</button>
+                <div class="toolbar-menu-separator"></div>
+                <button type="button" class="toolbar-menu-item" data-action="toggleEditor">显示/隐藏编辑器 <span class="menu-shortcut">Ctrl+E</span></button>
+                <button type="button" class="toolbar-menu-item" data-action="toggleCanvasMode">切换画布模式</button>
+                <button type="button" class="toolbar-menu-item" data-action="toggleMinimap">显示/隐藏小地图</button>
+                <button type="button" class="toolbar-menu-item" data-action="toggleGrid">显示/隐藏网格</button>
+                <button type="button" class="toolbar-menu-item" data-action="focusMode">进入专注模式</button>
+                <button type="button" class="toolbar-menu-item" data-action="customizeToolbar">自定义工具栏…</button>
+              </div>
+            </div>
+            <div class="toolbar-menu-parent-wrap">
+              <span class="toolbar-menu-parent">配色方案</span>
+              <div class="toolbar-menu-submenu">
+                <button type="button" class="toolbar-menu-item" data-action="theme:vivid-red">绚丽红</button>
+                <button type="button" class="toolbar-menu-item" data-action="theme:default">天空蓝</button>
+                <button type="button" class="toolbar-menu-item" data-action="theme:ocean">海洋蓝</button>
+                <button type="button" class="toolbar-menu-item" data-action="theme:forest">森林绿</button>
+                <button type="button" class="toolbar-menu-item" data-action="theme:sunset">日落橙</button>
+                <button type="button" class="toolbar-menu-item" data-action="theme:mono">星空黑</button>
+                <div class="toolbar-menu-separator"></div>
+                <button type="button" class="toolbar-menu-item" data-action="manageThemes">配色方案管理…</button>
+              </div>
+            </div>
+            <div class="toolbar-menu-parent-wrap">
+              <span class="toolbar-menu-parent">布局</span>
+              <div class="toolbar-menu-submenu">
+                <button type="button" class="toolbar-menu-item" data-action="layout:right">向右展开</button>
+                <button type="button" class="toolbar-menu-item" data-action="layout:mind-map">左右分布</button>
+                <button type="button" class="toolbar-menu-item" data-action="layout:down">向下展开</button>
+              </div>
+            </div>
+            <div class="toolbar-menu-parent-wrap">
+              <span class="toolbar-menu-parent">工具</span>
+              <div class="toolbar-menu-submenu">
+                <button type="button" class="toolbar-menu-item" data-action="clearCache">清空缓存</button>
+                <button type="button" class="toolbar-menu-item" data-action="exportSvg">导出 SVG</button>
+              </div>
+            </div>
           </div>
         </div>
+        <select id="theme-select" title="配色方案">
+          <option value="vivid-red" selected>绚丽红</option>
+          <option value="default">天空蓝</option>
+          <option value="ocean">海洋蓝</option>
+          <option value="forest">森林绿</option>
+          <option value="sunset">日落橙</option>
+          <option value="mono">星空黑</option>
+        </select>
+        <div class="separator"></div>
+        <button id="btn-expand-all" title="全部展开">▤</button>
+        <button id="btn-collapse-all" title="全部折叠">▬</button>
+        <div class="separator"></div>
+        <button id="btn-add-child" type="button" title="新建子节点 (Tab)">↳</button>
+        <button id="btn-add-sibling" type="button" title="新建兄弟节点 (Enter)">＋</button>
+        <div class="separator"></div>
+        <button id="btn-canvas-mode" title="切换画布模式：拖拽定位 / 框选">▣ 框选</button>
+        <button id="btn-focus-mode" title="进入专注模式 (Ctrl+Shift+F)">⧉</button>
+        <button id="btn-toggle-editor" type="button" title="显示/隐藏编辑器 (Ctrl+E)">◐</button>
+        <button id="btn-center" title="居中视图">⌖ 居中</button>
+        <button id="btn-fit" title="适应画布">⊞ 适应</button>
+        <button id="btn-color-settings" title="打开配色方案管理">配色方案管理</button>
+        <select id="layout-select" title="布局方向">
+          <option value="right">向右展开</option>
+          <option value="mind-map">左右分布</option>
+          <option value="down">向下展开</option>
+        </select>
+      </div>
+      <div class="toolbar-right">
+        <span class="logo">◎ MarkMind</span>
       </div>
     </header>
 
@@ -64,7 +112,7 @@
       <div id="editor-panel">
         <textarea id="md-editor" spellcheck="false" placeholder="在此输入 Markdown...
 
-# 中心主题
+# 中心配色方案
 
 ## 分支一
 ### 子节点 1.1
@@ -90,7 +138,9 @@
   <input type="file" id="file-input" accept=".md,.markdown,.txt" style="display:none">
 
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
   <script src="parser.js"></script>
+  <script src="node-body.js"></script>
   <script src="layout.js"></script>
   <script src="renderer.js"></script>
   <script src="interactions.js"></script>

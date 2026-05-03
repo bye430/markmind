@@ -580,7 +580,8 @@ const CanvasEditor = (() => {
     const screenY = node.y * t.scale + t.y + svgRect.top - canvasRect.top;
     const screenW = node.width * t.scale;
     const screenH = node.height * t.scale;
-    const fontSize = LayoutEngine.DEFAULTS.fontSize[Math.min(node.depth, 3)] * t.scale;
+    const cfg = LayoutEngine.getCanvasFontConfig();
+    const fontSize = cfg.fontSize[Math.min(node.depth, 3)] * t.scale;
 
     _inputEl.style.display = 'block';
     _inputEl.style.left = screenX + 'px';
@@ -735,7 +736,7 @@ const CanvasEditor = (() => {
     if (!node) return;
 
     if (node.depth === 0) {
-      const newId = _callbacks.onInsertChild(id, '新主题');
+      const newId = _callbacks.onInsertChild(id, '细分主题');
       if (newId) {
         _callbacks.performUpdate(true);
         requestAnimationFrame(() => {
@@ -748,7 +749,7 @@ const CanvasEditor = (() => {
       return;
     }
 
-    const newId = _callbacks.onInsertSibling(id, '新主题');
+    const newId = _callbacks.onInsertSibling(id, '细分主题');
     if (newId) {
       _callbacks.performUpdate(true);
       requestAnimationFrame(() => {
@@ -769,7 +770,7 @@ const CanvasEditor = (() => {
       node.collapsed = false;
     }
 
-    const newId = _callbacks.onInsertChild(id, '新主题');
+    const newId = _callbacks.onInsertChild(id, '细分主题');
     if (newId) {
       _callbacks.performUpdate(true);
       requestAnimationFrame(() => {
@@ -906,5 +907,7 @@ const CanvasEditor = (() => {
     clearSelection,
     setSelection,
     reapplyAfterRender,
+    insertSibling,
+    insertChild,
   };
 })();

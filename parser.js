@@ -1,8 +1,9 @@
 /**
  * MarkMind — Markdown Parser
  *
- * Parses Markdown headings into a tree structure suitable for mind map rendering.
- * Supports incremental diffing to detect structural changes.
+ * Parses Markdown into a tree of heading nodes (unlimited depth).
+ * Non-heading content (lists, code fences, paragraphs) is attached as
+ * structured `body` blocks on the most recent heading node.
  */
 
 const MarkdownParser = (() => {
@@ -17,15 +18,24 @@ const MarkdownParser = (() => {
   }
 
   /**
-   * Parse markdown text into a flat list of heading entries.
-   * Also captures list items (- or *) as leaf children.
+   * Parse markdown into a flat sequence of structural tokens.
+   * Tokens:
+   *   { type: 'heading', level, text, line }
+   *   { type: 'list',    items: [...], line, raw: '...' }   // top-level list block
+   *   { type: 'code',    lang, content, line, raw: '...' }
+   *   { type: 'paragraph', text, line, raw: '...' }
+   *
+   * Each list item: { text, indent, line, children: [items] }
    */
   function tokenize(markdown) {
     const lines = markdown.split('\n');
     const tokens = [];
 
-    for (let i = 0; i < lines.length; i++) {
+    let i = 0;
+    while (i < lines.length) {
       const line = lines[i];
+
+      // --- heading ---
       const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
       if (headingMatch) {
         tokens.push({
@@ -34,19 +44,141 @@ const MarkdownParser = (() => {
           text: headingMatch[2].trim(),
           line: i,
         });
+        i++;
         continue;
       }
 
-      const listMatch = line.match(/^(\s*)[-*+]\s+(.+)$/);
-      if (listMatch) {
-        const indent = listMatch[1].length;
+      // --- code fence ---
+      const fenceMatch = line.match(/^(\s*)(```|~~~)([\w+-]*)\s*$/);
+      if (fenceMatch) {
+        const indent = fenceMatch[1];
+        const fence = fenceMatch[2];
+        const lang = fenceMatch[3] || '';
+        const startLine = i;
+        const startRaw = line;
+        const codeLines = [];
+        i++;
+        let endRaw = '';
+        while (i < lines.length) {
+          const closeMatch = lines[i].match(/^(\s*)(```|~~~)\s*$/);
+          if (closeMatch && closeMatch[2] === fence) {
+            endRaw = lines[i];
+            i++;
+            break;
+          }
+          codeLines.push(lines[i]);
+          i++;
+        }
         tokens.push({
-          type: 'list-item',
-          indent,
-          text: listMatch[2].trim(),
-          line: i,
+          type: 'code',
+          lang,
+          content: codeLines.join('\n'),
+          line: startLine,
+          raw: [startRaw, ...codeLines, endRaw].filter(s => s !== '').join('\n'),
+          indent: indent.length,
         });
+        continue;
       }
+
+      // --- list block (consecutive list items, possibly nested) ---
+      if (/^(\s*)[-*+]\s+(.+)$/.test(line) || /^(\s*)\d+\.\s+(.+)$/.test(line)) {
+        const startLine = i;
+        const blockLines = [];
+        const items = [];
+        const stack = [];
+
+        while (i < lines.length) {
+          const cur = lines[i];
+          const ulMatch = cur.match(/^(\s*)([-*+])\s+(.+)$/);
+          const olMatch = cur.match(/^(\s*)(\d+)\.\s+(.+)$/);
+          if (!ulMatch && !olMatch) {
+            // Allow blank line inside list only if next line is still a list item.
+            if (cur.trim() === '') {
+              const next = lines[i + 1];
+              if (next && (/^(\s*)[-*+]\s+/.test(next) || /^(\s*)\d+\.\s+/.test(next))) {
+                blockLines.push(cur);
+                i++;
+                continue;
+              }
+            }
+            break;
+          }
+
+          let indent, marker, ordered, text;
+          if (ulMatch) {
+            indent = ulMatch[1].length;
+            marker = ulMatch[2];
+            ordered = false;
+            text = ulMatch[3];
+          } else {
+            indent = olMatch[1].length;
+            marker = olMatch[2] + '.';
+            ordered = true;
+            text = olMatch[3];
+          }
+
+          const item = {
+            text: text.trim(),
+            indent,
+            ordered,
+            marker,
+            line: i,
+            children: [],
+          };
+
+          while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+            stack.pop();
+          }
+          if (stack.length === 0) {
+            items.push(item);
+          } else {
+            stack[stack.length - 1].children.push(item);
+          }
+          stack.push(item);
+
+          blockLines.push(cur);
+          i++;
+        }
+
+        tokens.push({
+          type: 'list',
+          items,
+          line: startLine,
+          raw: blockLines.join('\n'),
+        });
+        continue;
+      }
+
+      // --- blank line ---
+      if (line.trim() === '') {
+        i++;
+        continue;
+      }
+
+      // --- paragraph (consecutive non-heading, non-list, non-code lines) ---
+      const paraStart = i;
+      const paraLines = [line];
+      i++;
+      while (i < lines.length) {
+        const cur = lines[i];
+        if (
+          cur.trim() === '' ||
+          /^(#{1,6})\s+/.test(cur) ||
+          /^(\s*)(```|~~~)/.test(cur) ||
+          /^(\s*)[-*+]\s+/.test(cur) ||
+          /^(\s*)\d+\.\s+/.test(cur)
+        ) {
+          break;
+        }
+        paraLines.push(cur);
+        i++;
+      }
+      tokens.push({
+        type: 'paragraph',
+        text: paraLines.join('\n').trim(),
+        line: paraStart,
+        raw: paraLines.join('\n'),
+      });
     }
 
     return tokens;
@@ -54,78 +186,142 @@ const MarkdownParser = (() => {
 
   /**
    * Build a tree from tokens.
-   * Returns the root node of the mind map.
+   * Only heading tokens become nodes; everything else gets attached to the
+   * most recent heading node's `body` array.
+   *
+   * If there is no heading at all, a synthetic root is created.
    */
   function buildTree(tokens) {
     if (tokens.length === 0) {
-      return {
-        id: generateId(),
-        text: '空白脑图',
-        depth: 0,
-        children: [],
-        collapsed: false,
-        _key: '空白脑图@0',
-        _hasLatex: false,
-      };
+      return makeEmptyRoot();
     }
 
-    const firstToken = tokens[0];
-    const root = {
-      id: generateId(),
-      text: firstToken.text,
-      depth: 0,
-      children: [],
-      collapsed: false,
-      _key: firstToken.text + '@0',
-      line: firstToken.line,
-      _hasLatex: hasLatex(firstToken.text),
-    };
+    const firstHeadingIdx = tokens.findIndex(t => t.type === 'heading');
 
-    const stack = [root];
-    let lastHeadingNode = root;
+    let root;
+    let bodyForCurrent;
+    let stack;
+    let baseLevel;
+    let cursor = 0;
 
-    for (let i = 1; i < tokens.length; i++) {
-      const token = tokens[i];
+    if (firstHeadingIdx === -1) {
+      // No heading: synthesize a root and put everything in its body.
+      root = makeEmptyRoot();
+      root.body = tokensToBody(tokens);
+      return root;
+    }
 
-      if (token.type === 'heading') {
-        const node = {
-          id: generateId(),
-          text: token.text,
-          depth: token.level - firstToken.level,
-          children: [],
-          collapsed: false,
-          _key: token.text + '@' + token.level,
-          line: token.line,
-          _hasLatex: hasLatex(token.text),
-        };
+    if (firstHeadingIdx > 0) {
+      // Pre-heading content: put it on a synthetic root that uses the first
+      // heading as its title.
+      const first = tokens[firstHeadingIdx];
+      root = makeNode(first.text, 0, first.line, first.level);
+      root.body = tokensToBody(tokens.slice(0, firstHeadingIdx));
+      cursor = firstHeadingIdx + 1;
+      baseLevel = first.level;
+    } else {
+      const first = tokens[0];
+      root = makeNode(first.text, 0, first.line, first.level);
+      cursor = 1;
+      baseLevel = first.level;
+    }
+
+    stack = [root];
+    bodyForCurrent = root.body;
+
+    while (cursor < tokens.length) {
+      const tk = tokens[cursor];
+      if (tk.type === 'heading') {
+        const depth = Math.max(1, tk.level - baseLevel);
+        const node = makeNode(tk.text, depth, tk.line, tk.level);
 
         while (stack.length > 1 && stack[stack.length - 1].depth >= node.depth) {
           stack.pop();
         }
-
-        const parent = stack[stack.length - 1];
-        parent.children.push(node);
+        stack[stack.length - 1].children.push(node);
         stack.push(node);
-        lastHeadingNode = node;
-
-      } else if (token.type === 'list-item') {
-        const node = {
-          id: generateId(),
-          text: token.text,
-          depth: lastHeadingNode.depth + 1 + Math.floor(token.indent / 2),
-          children: [],
-          collapsed: false,
-          _key: token.text + '@list-' + token.line,
-          line: token.line,
-          _hasLatex: hasLatex(token.text),
-        };
-
-        lastHeadingNode.children.push(node);
+        bodyForCurrent = node.body;
+      } else {
+        const block = tokenToBodyBlock(tk);
+        if (block) bodyForCurrent.push(block);
       }
+      cursor++;
     }
 
     assignDepths(root, 0);
+    finalizeBodyKeys(root);
     return root;
+  }
+
+  function makeEmptyRoot() {
+    return {
+      id: generateId(),
+      text: '空白脑图',
+      depth: 0,
+      children: [],
+      body: [],
+      collapsed: false,
+      bodyExpanded: false,
+      _key: '空白脑图@0',
+      _hasLatex: false,
+      _headingLevel: 1,
+    };
+  }
+
+  function makeNode(text, depth, line, headingLevel) {
+    return {
+      id: generateId(),
+      text,
+      depth,
+      children: [],
+      body: [],
+      collapsed: false,
+      bodyExpanded: false,
+      _key: text + '@' + (headingLevel || depth),
+      line,
+      _hasLatex: hasLatex(text),
+      _headingLevel: headingLevel || (depth + 1),
+    };
+  }
+
+  function tokensToBody(tokens) {
+    const out = [];
+    for (const tk of tokens) {
+      if (tk.type === 'heading') continue;
+      const b = tokenToBodyBlock(tk);
+      if (b) out.push(b);
+    }
+    return out;
+  }
+
+  function tokenToBodyBlock(tk) {
+    if (tk.type === 'list') {
+      return {
+        type: 'list',
+        items: tk.items,
+        line: tk.line,
+        raw: tk.raw,
+      };
+    }
+    if (tk.type === 'code') {
+      return {
+        type: 'code',
+        lang: tk.lang,
+        content: tk.content,
+        line: tk.line,
+        raw: tk.raw,
+        indent: tk.indent || 0,
+      };
+    }
+    if (tk.type === 'paragraph') {
+      return {
+        type: 'paragraph',
+        text: tk.text,
+        line: tk.line,
+        raw: tk.raw,
+      };
+    }
+    return null;
   }
 
   function assignDepths(node, depth) {
@@ -133,6 +329,19 @@ const MarkdownParser = (() => {
     for (const child of node.children) {
       assignDepths(child, depth + 1);
     }
+  }
+
+  /**
+   * Generate stable identity keys for body blocks so state (e.g. expanded
+   * code panels) can survive re-parses.
+   */
+  function finalizeBodyKeys(root) {
+    flatten(root).forEach(node => {
+      if (!node.body) return;
+      node.body.forEach((block, idx) => {
+        block._key = `${node._key}::body[${idx}]:${block.type}`;
+      });
+    });
   }
 
   /**
@@ -193,8 +402,8 @@ const MarkdownParser = (() => {
   }
 
   /**
-   * Transfer collapsed state and IDs from old tree to new tree
-   * so incremental updates preserve user interaction state.
+   * Transfer collapsed state, body-expanded state, and IDs from old tree to
+   * new tree so incremental updates preserve user interaction state.
    */
   function transferState(oldRoot, newRoot) {
     const oldMap = new Map();
@@ -205,6 +414,7 @@ const MarkdownParser = (() => {
       if (old) {
         n.id = old.id;
         n.collapsed = old.collapsed;
+        n.bodyExpanded = old.bodyExpanded || false;
       }
     });
   }
@@ -280,7 +490,6 @@ const MarkdownParser = (() => {
   /**
    * Parse inline markdown formatting into segments.
    * Handles: ***bold-italic***, **bold**, *italic*, `code`
-   * Returns array of { type: 'text'|'bold'|'italic'|'bold-italic'|'code', content: string }
    */
   function parseInlineMarkdown(text) {
     const regex = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`)/g;
@@ -317,6 +526,7 @@ const MarkdownParser = (() => {
 
   return {
     parse,
+    tokenize,
     flatten,
     diffTrees,
     transferState,

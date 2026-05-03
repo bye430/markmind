@@ -18,10 +18,45 @@ const LayoutEngine = (() => {
     maxNodeWidth: 600,
     fontSize: [16, 14, 13, 12],
     fontWeight: [700, 600, 500, 400],
+    bodyMaxWidth: 520,
+    bodyMinWidth: 240,
+    bodyGap: 8,
   };
 
   let _measureDiv = null;
   const FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif';
+
+  function getCanvasFontConfig() {
+    const root = typeof document !== 'undefined' ? document.documentElement : null;
+    if (!root) {
+      return { fontFamily: FONT_FAMILY, fontSize: DEFAULTS.fontSize.slice(), fontWeight: DEFAULTS.fontWeight.slice() };
+    }
+    const style = getComputedStyle(root);
+    const getNum = (name, fallback) => {
+      const v = style.getPropertyValue(name).trim();
+      const n = parseInt(v, 10);
+      return v && !isNaN(n) ? n : fallback;
+    };
+    const getStr = (name, fallback) => {
+      const v = style.getPropertyValue(name).trim();
+      return v || fallback;
+    };
+    return {
+      fontFamily: getStr('--canvas-font-family', FONT_FAMILY),
+      fontSize: [
+        getNum('--canvas-font-size-0', DEFAULTS.fontSize[0]),
+        getNum('--canvas-font-size-1', DEFAULTS.fontSize[1]),
+        getNum('--canvas-font-size-2', DEFAULTS.fontSize[2]),
+        getNum('--canvas-font-size-3', DEFAULTS.fontSize[3]),
+      ],
+      fontWeight: [
+        getNum('--canvas-font-weight-0', DEFAULTS.fontWeight[0]),
+        getNum('--canvas-font-weight-1', DEFAULTS.fontWeight[1]),
+        getNum('--canvas-font-weight-2', DEFAULTS.fontWeight[2]),
+        getNum('--canvas-font-weight-3', DEFAULTS.fontWeight[3]),
+      ],
+    };
+  }
   const CODE_FONT = '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace';
   const WRAP_THRESHOLD = 280;
 
@@ -105,14 +140,15 @@ const LayoutEngine = (() => {
   }
 
   function measureNode(text, depth, hasLatex, hasRichText) {
-    const fontSize = DEFAULTS.fontSize[Math.min(depth, DEFAULTS.fontSize.length - 1)];
-    const fontWeight = DEFAULTS.fontWeight[Math.min(depth, DEFAULTS.fontWeight.length - 1)];
+    const cfg = getCanvasFontConfig();
+    const fontSize = cfg.fontSize[Math.min(depth, cfg.fontSize.length - 1)];
+    const fontWeight = cfg.fontWeight[Math.min(depth, cfg.fontWeight.length - 1)];
     const padH = depth === 0 ? DEFAULTS.rootPadH : DEFAULTS.nodePadH;
     const maxContentW = DEFAULTS.maxNodeWidth - padH * 2;
 
     const div = getMeasureDiv();
     div.style.fontSize = fontSize + 'px';
-    div.style.fontFamily = FONT_FAMILY;
+    div.style.fontFamily = cfg.fontFamily;
     div.style.fontWeight = fontWeight;
     div.style.lineHeight = '1.45';
     div.style.padding = '0';
@@ -163,7 +199,8 @@ const LayoutEngine = (() => {
 
     const padH = node.depth === 0 ? DEFAULTS.rootPadH : DEFAULTS.nodePadH;
     const padV = node.depth === 0 ? DEFAULTS.rootPadV : DEFAULTS.nodePadV;
-    const minH = DEFAULTS.fontSize[Math.min(node.depth, 3)] + padV * 2;
+    const cfg = getCanvasFontConfig();
+    const minH = cfg.fontSize[Math.min(node.depth, 3)] + padV * 2;
 
     node.width = Math.min(Math.max(m.textWidth + padH * 2, DEFAULTS.minNodeWidth), DEFAULTS.maxNodeWidth);
     node.height = Math.max(m.textHeight + padV * 2, minH);
@@ -171,10 +208,56 @@ const LayoutEngine = (() => {
     node.textHeight = m.textHeight;
     node._wrapped = m.wrapped;
 
+    if (node.body && node.body.length > 0 && node.bodyExpanded) {
+      const bm = measureBody(node);
+      node._bodyWidth = bm.width;
+      node._bodyHeight = bm.height;
+      node._totalHeight = node.height + DEFAULTS.bodyGap + bm.height;
+      node._totalWidth = Math.max(node.width, bm.width);
+    } else {
+      node._bodyWidth = 0;
+      node._bodyHeight = 0;
+      node._totalHeight = node.height;
+      node._totalWidth = node.width;
+    }
+
     const visibleChildren = node.collapsed ? [] : node.children;
     for (const child of visibleChildren) {
       measureNodes(child);
     }
+  }
+
+  let _bodyMeasureDiv = null;
+  function getBodyMeasureDiv() {
+    if (!_bodyMeasureDiv) {
+      _bodyMeasureDiv = document.createElement('div');
+      _bodyMeasureDiv.className = 'mm-body-card mm-body-measure';
+      _bodyMeasureDiv.style.cssText =
+        'position:absolute;visibility:hidden;pointer-events:none;' +
+        'left:-9999px;top:-9999px;' +
+        'box-sizing:border-box;' +
+        `max-width:${DEFAULTS.bodyMaxWidth}px;` +
+        `min-width:${DEFAULTS.bodyMinWidth}px;`;
+      document.body.appendChild(_bodyMeasureDiv);
+    }
+    return _bodyMeasureDiv;
+  }
+
+  /**
+   * Render body content into a hidden DOM element to measure its natural
+   * size. Returns { width, height }.
+   */
+  function measureBody(node) {
+    if (typeof NodeBodyRenderer === 'undefined') {
+      return { width: DEFAULTS.bodyMinWidth, height: 60 };
+    }
+    const div = getBodyMeasureDiv();
+    div.innerHTML = NodeBodyRenderer.renderToHtml(node.body);
+    const r = div.getBoundingClientRect();
+    return {
+      width: Math.min(Math.max(Math.ceil(r.width), DEFAULTS.bodyMinWidth), DEFAULTS.bodyMaxWidth),
+      height: Math.max(Math.ceil(r.height), 40),
+    };
   }
 
   /**
@@ -195,8 +278,9 @@ const LayoutEngine = (() => {
 
   function computeSubtreeHeights(node) {
     const visibleChildren = node.collapsed ? [] : node.children;
+    const ownHeight = node._totalHeight || node.height;
     if (visibleChildren.length === 0) {
-      node._subtreeHeight = node.height;
+      node._subtreeHeight = ownHeight;
       return;
     }
     let total = 0;
@@ -205,15 +289,16 @@ const LayoutEngine = (() => {
       total += child._subtreeHeight;
     }
     total += (visibleChildren.length - 1) * DEFAULTS.vGap;
-    node._subtreeHeight = Math.max(node.height, total);
+    node._subtreeHeight = Math.max(ownHeight, total);
   }
 
   function positionRight(node, x, yStart) {
     node.x = x;
     const visibleChildren = node.collapsed ? [] : node.children;
+    const ownHeight = node._totalHeight || node.height;
 
     if (visibleChildren.length === 0) {
-      node.y = yStart + node._subtreeHeight / 2 - node.height / 2;
+      node.y = yStart + node._subtreeHeight / 2 - ownHeight / 2;
       return;
     }
 
@@ -303,9 +388,10 @@ const LayoutEngine = (() => {
   function positionLeft(node, x, yStart) {
     node.x = x;
     const visibleChildren = node.collapsed ? [] : node.children;
+    const ownHeight = node._totalHeight || node.height;
 
     if (visibleChildren.length === 0) {
-      node.y = yStart + node._subtreeHeight / 2 - node.height / 2;
+      node.y = yStart + node._subtreeHeight / 2 - ownHeight / 2;
       return;
     }
 
@@ -343,8 +429,9 @@ const LayoutEngine = (() => {
 
   function computeSubtreeWidths(node) {
     const visibleChildren = node.collapsed ? [] : node.children;
+    const ownWidth = node._totalWidth || node.width;
     if (visibleChildren.length === 0) {
-      node._subtreeWidth = node.width;
+      node._subtreeWidth = ownWidth;
       return;
     }
     let total = 0;
@@ -353,12 +440,13 @@ const LayoutEngine = (() => {
       total += child._subtreeWidth;
     }
     total += (visibleChildren.length - 1) * DEFAULTS.hGap * 0.6;
-    node._subtreeWidth = Math.max(node.width, total);
+    node._subtreeWidth = Math.max(ownWidth, total);
   }
 
   function positionDown(node, xStart, y) {
     node.y = y;
     const visibleChildren = node.collapsed ? [] : node.children;
+    const ownHeight = node._totalHeight || node.height;
 
     if (visibleChildren.length === 0) {
       node.x = xStart + node._subtreeWidth / 2 - node.width / 2;
@@ -372,7 +460,7 @@ const LayoutEngine = (() => {
     childX += offset;
 
     for (const child of visibleChildren) {
-      positionDown(child, childX, y + node.height + DEFAULTS.vGap * 3);
+      positionDown(child, childX, y + ownHeight + DEFAULTS.vGap * 3);
       childX += child._subtreeWidth + DEFAULTS.hGap * 0.6;
     }
 
@@ -398,10 +486,12 @@ const LayoutEngine = (() => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of nodes) {
       if (n.x === undefined) continue;
+      const w = n._totalWidth || n.width || 0;
+      const h = n._totalHeight || n.height || 0;
       minX = Math.min(minX, n.x);
       minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + (n.width || 0));
-      maxY = Math.max(maxY, n.y + (n.height || 0));
+      maxX = Math.max(maxX, n.x + w);
+      maxY = Math.max(maxY, n.y + h);
     }
     return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
   }
@@ -418,9 +508,11 @@ const LayoutEngine = (() => {
   return {
     compute,
     getBounds,
+    measureBody,
     DEFAULTS,
     FONT_FAMILY,
     CODE_FONT,
+    getCanvasFontConfig,
     populatePlainText: _populatePlainText,
     populateRichText: _populateRichText,
     populateLatexText: _populateLatexText,

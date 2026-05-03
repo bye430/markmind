@@ -16,28 +16,165 @@
   const btnFit = document.getElementById('btn-fit');
   const btnCollapseAll = document.getElementById('btn-collapse-all');
   const btnExpandAll = document.getElementById('btn-expand-all');
+  const btnAddChild = document.getElementById('btn-add-child');
+  const btnAddSibling = document.getElementById('btn-add-sibling');
   const btnToggleEditor = document.getElementById('btn-toggle-editor');
+  const btnFocusMode = document.getElementById('btn-focus-mode');
   const btnMenu = document.getElementById('btn-menu');
   const menuDropdown = document.getElementById('toolbar-menu-dropdown');
   const btnCanvasMode = document.getElementById('btn-canvas-mode');
+  const btnColorSettings = document.getElementById('btn-color-settings');
   const fileInput = document.getElementById('file-input');
   const editorPanel = document.getElementById('editor-panel');
+  const canvasPanel = document.getElementById('canvas-panel');
 
   let currentRoot = null;
-  let layoutDirection = 'right';
+  let layoutDirection = 'mind-map';
   let updateTimer = null;
   let currentFileName = 'mindmap.md';
+  /** @type {FileSystemFileHandle | null} 通过「打开」或「另存为」得到的可写句柄，用于「保存」时直接写入 */
+  let currentFileHandle = null;
   let _suppressEditorSync = false;
   let _dirty = false;
   let _savedContent = '';
+  let _externalChangeCheckTimer = null;
+  let _externalChangeDialogOpen = false;
   const UPDATE_DELAY = 200;
+  const EXTERNAL_CHANGE_CHECK_INTERVAL = 3000;
+  const RECENT_FILES_LIMIT = 10;
+  const recentFiles = [];
+  let recentFilesContainer = null;
 
   /* ---- Session cache (localStorage) ---- */
 
   const CACHE_KEY = 'markmind_session';
   const SKIP_CACHE_KEY = 'markmind_skip_cache';
+  /** 自定义配色方案列表持久化存储（与 session 缓存分离，清空缓存不影响） */
+  const CUSTOM_THEMES_STORAGE_KEY = 'markmind_custom_themes';
   let _cacheTimer = null;
   const CACHE_DELAY = 500;
+  let customColors = null;
+  let colorPanelEl = null;
+  /** 当前正在编辑/使用的自定义配色方案 id（themeSelect 为 custom:<id> 时） */
+  let _activeCustomThemeId = null;
+  let _gridEnabled = false;
+  let _isFocusMode = false;
+
+  const TOOLBAR_CONFIG_KEY = 'markmind_toolbar_config_v2';
+  const DEFAULT_TOOLBAR_CONFIG = {
+    center: false,
+    fit: false,
+    collapseAll: true,
+    expandAll: true,
+    theme: true,
+    layout: false,
+    canvasMode: true,
+    toggleEditor: true,
+    colorSettings: false,
+    addChild: true,
+    addSibling: true,
+  };
+
+  function loadToolbarConfig() {
+    try {
+      const raw = localStorage.getItem(TOOLBAR_CONFIG_KEY);
+      const stored = raw ? JSON.parse(raw) : null;
+      const base = Object.assign({}, DEFAULT_TOOLBAR_CONFIG);
+      if (stored && typeof stored === 'object') {
+        for (const k in DEFAULT_TOOLBAR_CONFIG) {
+          if (Object.prototype.hasOwnProperty.call(stored, k)) {
+            base[k] = !!stored[k];
+          }
+        }
+      }
+      return base;
+    } catch (_) {
+      return Object.assign({}, DEFAULT_TOOLBAR_CONFIG);
+    }
+  }
+
+  function applyToolbarConfig(config) {
+    const cfg = config || loadToolbarConfig();
+    if (btnCenter) btnCenter.style.display = cfg.center ? '' : 'none';
+    if (btnFit) btnFit.style.display = cfg.fit ? '' : 'none';
+    if (btnCollapseAll) btnCollapseAll.style.display = cfg.collapseAll ? '' : 'none';
+    if (btnExpandAll) btnExpandAll.style.display = cfg.expandAll ? '' : 'none';
+    if (themeSelect) themeSelect.style.display = cfg.theme ? '' : 'none';
+    if (layoutSelect) layoutSelect.style.display = cfg.layout ? '' : 'none';
+    if (btnCanvasMode) btnCanvasMode.style.display = cfg.canvasMode ? '' : 'none';
+    if (btnToggleEditor) btnToggleEditor.style.display = cfg.toggleEditor ? '' : 'none';
+    if (btnColorSettings) btnColorSettings.style.display = cfg.colorSettings ? '' : 'none';
+    if (btnAddChild) btnAddChild.style.display = cfg.addChild ? '' : 'none';
+    if (btnAddSibling) btnAddSibling.style.display = cfg.addSibling ? '' : 'none';
+  }
+
+  function saveToolbarConfig(config) {
+    try {
+      localStorage.setItem(TOOLBAR_CONFIG_KEY, JSON.stringify(config));
+    } catch (_) { /* ignore */ }
+    applyToolbarConfig(config);
+  }
+
+  /** 从 localStorage 读取已保存的自定义配色方案列表（持久化，不受清空缓存影响） */
+  function loadCustomThemes() {
+    try {
+      const raw = localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY);
+      if (!raw) return [];
+      const list = JSON.parse(raw);
+      return Array.isArray(list) ? list : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /** 将自定义配色方案列表写入 localStorage */
+  function saveCustomThemes(list) {
+    try {
+      localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(list));
+    } catch (_) { /* ignore */ }
+  }
+
+  /** 重建配色方案下拉选项：内置配色方案 + 已保存的自定义方案 */
+  function rebuildThemeSelectOptions() {
+    if (!themeSelect) return;
+    const builtin = [
+      { value: 'vivid-red', text: '绚丽红' },
+      { value: 'default', text: '天空蓝' },
+      { value: 'ocean', text: '海洋蓝' },
+      { value: 'forest', text: '森林绿' },
+      { value: 'sunset', text: '日落橙' },
+      { value: 'mono', text: '星空黑' },
+    ];
+    const saved = loadCustomThemes();
+    const currentValue = themeSelect.value;
+    themeSelect.innerHTML = '';
+    builtin.forEach((opt) => {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.text;
+      themeSelect.appendChild(o);
+    });
+    if (saved.length > 0) {
+      saved.forEach((item) => {
+        const o = document.createElement('option');
+        o.value = 'custom:' + item.id;
+        o.textContent = item.name;
+        themeSelect.appendChild(o);
+      });
+    }
+    if (currentValue && Array.prototype.some.call(themeSelect.options, (opt) => opt.value === currentValue)) {
+      themeSelect.value = currentValue;
+    }
+  }
+
+  /** 从主界面跳转到独立的配色方案管理页面 */
+  function showThemeManagerDialog() {
+    try {
+      window.location.href = 'theme-manager.html';
+    } catch (_) {
+      // ignore
+    }
+  }
 
   function saveSessionCache() {
     clearTimeout(_cacheTimer);
@@ -48,6 +185,10 @@
     try {
       if (localStorage.getItem(SKIP_CACHE_KEY)) return;
       const t = Renderer.getTransform();
+      const currentCanvasMode =
+        typeof Interactions !== 'undefined' && Interactions.getCanvasMode
+          ? Interactions.getCanvasMode()
+          : 'pan';
       const data = {
         md: editor.value,
         fileName: currentFileName,
@@ -60,7 +201,9 @@
         dirty: _dirty,
         savedContent: _savedContent,
         minimapCollapsed: typeof Interactions !== 'undefined' && Interactions.isMinimapCollapsed ? Interactions.isMinimapCollapsed() : false,
-        canvasMode: typeof Interactions !== 'undefined' && Interactions.getCanvasMode ? Interactions.getCanvasMode() : 'marquee',
+        canvasMode: currentCanvasMode,
+        customColors,
+        showGrid: _gridEnabled,
         ts: Date.now(),
       };
       localStorage.setItem(CACHE_KEY, JSON.stringify(data));
@@ -78,6 +221,35 @@
   function clearSessionCache() {
     localStorage.removeItem(CACHE_KEY);
     localStorage.setItem(SKIP_CACHE_KEY, '1');
+    /* 不清理 CUSTOM_THEMES_STORAGE_KEY，自定义配色方案持久保留 */
+  }
+
+  function setCanvasGridEnabled(enabled) {
+    _gridEnabled = !!enabled;
+    if (!canvasPanel) return;
+    canvasPanel.classList.toggle('canvas-grid-on', _gridEnabled);
+  }
+
+  function enterFocusMode() {
+    if (_isFocusMode) return;
+    _isFocusMode = true;
+    document.body.classList.add('mm-focus-mode');
+    if (document.documentElement.requestFullscreen) {
+      try {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } catch (_) { /* ignore */ }
+    }
+  }
+
+  function exitFocusMode() {
+    if (!_isFocusMode) return;
+    _isFocusMode = false;
+    document.body.classList.remove('mm-focus-mode');
+    if (document.fullscreenElement && document.exitFullscreen) {
+      try {
+        document.exitFullscreen().catch(() => {});
+      } catch (_) { /* ignore */ }
+    }
   }
 
   const DEFAULT_MD = `# MarkMind 脑图工具
@@ -172,22 +344,23 @@
 - 高斯积分 $\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$
 - 麦克斯韦方程 $\\nabla \\times \\vec{E} = -\\frac{\\partial \\vec{B}}{\\partial t}$
 
-## 布局与主题
+## 布局与配色方案
 ### 布局方向
-- 向右展开 (默认)
-- 左右分布 (思维导图)
+- 左右分布 (默认，思维导图)
+- 向右展开
 - 向下展开 (组织架构)
-### 主题配色
-- 默认主题
+### 配色方案配色
+- 绚丽红
+- 天空蓝
 - 海洋蓝
 - 森林绿
 - 日落橙
-- 黑白极简
+- 星空黑
 
 ## 导出与快捷键
 ### 导出 SVG
 - 矢量图无损缩放
-- 保留完整主题样式
+- 保留完整配色方案样式
 ### 全局快捷键
 - Ctrl+O 打开文件
 - Ctrl+S 保存文件
@@ -220,28 +393,57 @@
 
   function treeToMarkdown(root) {
     const lines = [];
-    serializeNode(root, 1, lines, true);
-    return lines.join('\n');
+    const startLevel = Math.min(Math.max(root._headingLevel || 1, 1), 6);
+    serializeNode(root, startLevel, lines, true);
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n');
   }
 
   function serializeNode(node, headingLevel, lines, isFirst) {
-    if (node._type === 'list-item') {
-      lines.push(`${'  '.repeat(node._indent || 0)}- ${node.text}`);
-    } else {
-      if (!isFirst && headingLevel <= 2) {
+    const lvl = Math.min(headingLevel, 6);
+    if (!isFirst) {
+      lines.push('');
+    }
+    lines.push(`${'#'.repeat(lvl)} ${node.text}`);
+
+    if (node.body && node.body.length > 0) {
+      for (const block of node.body) {
         lines.push('');
+        const text = serializeBodyBlock(block);
+        if (text) lines.push(text);
       }
-      lines.push(`${'#'.repeat(headingLevel)} ${node.text}`);
     }
 
-    for (let i = 0; i < node.children.length; i++) {
-      const child = node.children[i];
-      if (child._type === 'list-item') {
-        serializeNode(child, headingLevel, lines, false);
-      } else {
-        serializeNode(child, headingLevel + 1, lines, false);
+    for (const child of node.children) {
+      serializeNode(child, headingLevel + 1, lines, false);
+    }
+  }
+
+  function serializeBodyBlock(block) {
+    if (!block) return '';
+    if (block.type === 'list') {
+      if (block.raw && block.raw.trim() !== '') return block.raw;
+      return serializeListItems(block.items || [], 0);
+    }
+    if (block.type === 'code') {
+      if (block.raw && block.raw.trim() !== '') return block.raw;
+      return '```' + (block.lang || '') + '\n' + (block.content || '') + '\n```';
+    }
+    if (block.type === 'paragraph') {
+      return block.raw || block.text || '';
+    }
+    return '';
+  }
+
+  function serializeListItems(items, indent) {
+    const out = [];
+    for (const it of items) {
+      const marker = it.ordered ? (it.marker || '1.') : '-';
+      out.push(`${'  '.repeat(indent)}${marker} ${it.text}`);
+      if (it.children && it.children.length > 0) {
+        out.push(serializeListItems(it.children, indent + 1));
       }
     }
+    return out.join('\n');
   }
 
   function rebuildMarkdownFromTree() {
@@ -279,6 +481,22 @@
 
   let _pendingNewNodeText = null;
 
+  function makeBlankNode(text, depth) {
+    return {
+      id: 'n' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+      text,
+      depth,
+      children: [],
+      body: [],
+      collapsed: false,
+      bodyExpanded: false,
+      _key: text + '@tmp-' + Date.now(),
+      _hasLatex: false,
+      _type: 'heading',
+      _headingLevel: Math.min(depth + 1, 6),
+    };
+  }
+
   function onInsertSibling(nodeId, text) {
     saveUndoSnapshot();
     const parent = findParent(nodeId);
@@ -286,19 +504,8 @@
 
     const node = getNodeById(nodeId);
     const idx = parent.children.indexOf(node);
-    const forceList = node._type === 'list-item' || node.depth >= 3;
 
-    const newNode = {
-      id: 'n' + Date.now(),
-      text,
-      depth: node.depth,
-      children: [],
-      collapsed: false,
-      _key: text + '@tmp-' + Date.now(),
-      _hasLatex: false,
-      _type: forceList ? 'list-item' : 'heading',
-      _indent: node._type === 'list-item' ? (node._indent || 0) : 0,
-    };
+    const newNode = makeBlankNode(text, node.depth);
 
     parent.children.splice(idx + 1, 0, newNode);
     _pendingNewNodeText = text;
@@ -312,22 +519,10 @@
     const node = getNodeById(nodeId);
     if (!node) return null;
 
-    const hasListChildren = node.children.length > 0 && node.children[0]._type === 'list-item';
-    const forceList = node.depth >= 2 || node._type === 'list-item' || hasListChildren;
-
-    const newNode = {
-      id: 'n' + Date.now(),
-      text,
-      depth: node.depth + 1,
-      children: [],
-      collapsed: false,
-      _key: text + '@tmp-' + Date.now(),
-      _hasLatex: false,
-      _type: forceList ? 'list-item' : 'heading',
-      _indent: forceList ? (node._type === 'list-item' ? (node._indent || 0) + 1 : 0) : 0,
-    };
+    const newNode = makeBlankNode(text, node.depth + 1);
 
     node.children.push(newNode);
+    if (node.collapsed) node.collapsed = false;
     _pendingNewNodeText = text;
     _pendingNewId = newNode.id;
     rebuildMarkdownFromTree();
@@ -424,17 +619,10 @@
     node.depth = newParent.depth + 1;
     (function fixDepths(n, d) {
       n.depth = d;
+      n._type = 'heading';
+      n._headingLevel = Math.min(d + 1, 6);
       for (const c of n.children) fixDepths(c, d + 1);
     })(node, newParent.depth + 1);
-
-    const hasListChildren = newParent.children.length > 0 && newParent.children[0]._type === 'list-item';
-    const forceList = newParent.depth >= 2 || newParent._type === 'list-item' || hasListChildren;
-    if (forceList) {
-      node._type = 'list-item';
-      node._indent = newParent._type === 'list-item' ? (newParent._indent || 0) + 1 : 0;
-    } else {
-      node._type = 'heading';
-    }
 
     if (insertIndex >= 0 && insertIndex <= newParent.children.length) {
       newParent.children.splice(insertIndex, 0, node);
@@ -537,25 +725,73 @@
     }
     const cached = loadSessionCache();
 
+    rebuildThemeSelectOptions();
+
     if (cached && cached.md) {
       editor.value = cached.md;
       currentFileName = cached.fileName || 'mindmap.md';
-      layoutDirection = cached.layout || 'right';
+      layoutDirection = cached.layout || 'mind-map';
       _savedContent = cached.savedContent || cached.md;
       _dirty = !!cached.dirty;
 
       if (cached.theme) {
-        themeSelect.value = cached.theme;
-        document.documentElement.setAttribute(
-          'data-theme', cached.theme === 'default' ? '' : cached.theme
-        );
+        if (cached.theme.startsWith('custom:')) {
+          const id = cached.theme.slice(7);
+          const list = loadCustomThemes();
+          const scheme = list.find((s) => s.id === id);
+          if (scheme && scheme.colors) {
+            customColors = JSON.parse(JSON.stringify(scheme.colors));
+            themeSelect.value = cached.theme;
+            document.documentElement.setAttribute('data-theme', '');
+            applyCustomColors();
+          } else {
+            // 找不到对应的自定义配色方案时退回内置默认「绚丽红」
+            themeSelect.value = 'vivid-red';
+            document.documentElement.setAttribute('data-theme', 'vivid-red');
+            clearCustomColors();
+          }
+        } else if (cached.theme === 'custom') {
+          // 旧版本遗留的“临时自定义配色方案”，退回内置默认「绚丽红」
+          themeSelect.value = 'vivid-red';
+          document.documentElement.setAttribute('data-theme', 'vivid-red');
+          clearCustomColors();
+        } else {
+          themeSelect.value = cached.theme;
+          document.documentElement.setAttribute(
+            'data-theme',
+            cached.theme === 'default' ? '' : cached.theme
+          );
+          clearCustomColors();
+        }
       }
-      if (cached.layout) layoutSelect.value = cached.layout;
+      if (cached.layout && layoutSelect) {
+        layoutSelect.value = cached.layout;
+      } else if (layoutSelect) {
+        layoutSelect.value = layoutDirection;
+      }
       if (cached.editorCollapsed) editorPanel.classList.add('collapsed');
+      if (typeof cached.showGrid === 'boolean') {
+        setCanvasGridEnabled(cached.showGrid);
+      } else {
+        setCanvasGridEnabled(false);
+      }
+      if (!cached.theme) {
+        themeSelect.value = 'vivid-red';
+        document.documentElement.setAttribute('data-theme', 'vivid-red');
+        clearCustomColors();
+      }
     } else {
       editor.value = DEFAULT_MD;
       _savedContent = editor.value;
+      layoutDirection = 'mind-map';
+      if (layoutSelect) layoutSelect.value = 'mind-map';
+      setCanvasGridEnabled(false);
+      themeSelect.value = 'vivid-red';
+      document.documentElement.setAttribute('data-theme', 'vivid-red');
+      clearCustomColors();
     }
+
+    applyToolbarConfig();
 
     updateTitleDirtyIndicator();
 
@@ -579,6 +815,11 @@
         performUpdate(true);
         saveSessionCache();
       },
+      onBodyToggle: (node) => {
+        node.bodyExpanded = !node.bodyExpanded;
+        performUpdate(true);
+        saveSessionCache();
+      },
     });
 
     Interactions.init(svg, {
@@ -591,7 +832,19 @@
     });
 
     if (cached && cached.minimapCollapsed) Interactions.setMinimapCollapsed(true);
-    if (cached && cached.canvasMode) Interactions.setCanvasMode(cached.canvasMode);
+    if (cached && cached.canvasMode) {
+      Interactions.setCanvasMode(cached.canvasMode);
+    } else {
+      Interactions.setCanvasMode('pan');
+    }
+
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement && _isFocusMode) {
+        // 用户按下 ESC 退出全屏时，同步退出专注模式
+        _isFocusMode = false;
+        document.body.classList.remove('mm-focus-mode');
+      }
+    });
 
     CanvasEditor.init(svg, {
       getRoot: () => currentRoot,
@@ -660,7 +913,25 @@
     });
 
     themeSelect.addEventListener('change', () => {
-      document.documentElement.setAttribute('data-theme', themeSelect.value === 'default' ? '' : themeSelect.value);
+      const value = themeSelect.value;
+      if (value.startsWith('custom:')) {
+        const id = value.slice(7);
+        _activeCustomThemeId = id;
+        const list = loadCustomThemes();
+        const scheme = list.find((s) => s.id === id);
+        if (scheme && scheme.colors) {
+          customColors = JSON.parse(JSON.stringify(scheme.colors));
+          document.documentElement.setAttribute('data-theme', '');
+          applyCustomColors();
+        } else {
+          if (!customColors) customColors = createDefaultCustomColors();
+          applyCustomColors();
+        }
+      } else {
+        _activeCustomThemeId = null;
+        document.documentElement.setAttribute('data-theme', value === 'default' ? '' : value);
+        clearCustomColors();
+      }
       performUpdate(false);
       saveSessionCache();
     });
@@ -672,24 +943,25 @@
       requestAnimationFrame(() => { Interactions.fitToView(currentRoot); saveSessionCache(); });
     });
 
-    function updateCanvasModeButton() {
-      if (!btnCanvasMode) return;
-      const mode = typeof Interactions !== 'undefined' && Interactions.getCanvasMode ? Interactions.getCanvasMode() : 'marquee';
-      if (mode === 'pan') {
-        btnCanvasMode.textContent = '✥ 拖拽';
-        btnCanvasMode.title = '当前：拖拽画布。点击切换为框选模式';
-      } else {
-        btnCanvasMode.textContent = '▣ 框选';
-        btnCanvasMode.title = '当前：框选模式。点击切换为拖拽画布模式';
-      }
-    }
-
     if (btnCanvasMode) {
       btnCanvasMode.addEventListener('click', () => {
         const mode = Interactions.getCanvasMode();
         Interactions.setCanvasMode(mode === 'marquee' ? 'pan' : 'marquee');
         updateCanvasModeButton();
         saveSessionCache();
+      });
+    }
+
+    if (btnColorSettings) {
+      btnColorSettings.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showThemeManagerDialog();
+      });
+    }
+
+    if (btnFocusMode) {
+      btnFocusMode.addEventListener('click', () => {
+        enterFocusMode();
       });
     }
 
@@ -715,6 +987,22 @@
       }
     });
 
+    if (btnAddChild) {
+      btnAddChild.addEventListener('click', () => {
+        if (typeof CanvasEditor !== 'undefined' && CanvasEditor.insertChild) {
+          CanvasEditor.insertChild();
+        }
+      });
+    }
+
+    if (btnAddSibling) {
+      btnAddSibling.addEventListener('click', () => {
+        if (typeof CanvasEditor !== 'undefined' && CanvasEditor.insertSibling) {
+          CanvasEditor.insertSibling();
+        }
+      });
+    }
+
     if (btnMenu && menuDropdown) {
       btnMenu.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -731,7 +1019,8 @@
           const action = el.getAttribute('data-action');
           menuDropdown.classList.remove('is-open');
           menuDropdown.setAttribute('aria-hidden', 'true');
-          if (action === 'open') fileInput.click();
+          if (!action) return;
+          if (action === 'open') openFile();
           else if (action === 'save') saveFile();
           else if (action === 'saveAs') saveFileAs();
           else if (action === 'undo') UndoManager.undo(editor.value, CanvasEditor.getSelectedIds());
@@ -740,6 +1029,43 @@
             clearSessionCache();
             if (typeof alert === 'function') alert('缓存已清空，下次打开将恢复默认界面。');
           } else if (action === 'exportSvg') exportSvg();
+          else if (action === 'centerView') {
+            if (btnCenter) btnCenter.click();
+          } else if (action === 'fitView') {
+            if (btnFit) btnFit.click();
+          } else if (action === 'collapseAll') {
+            if (btnCollapseAll) btnCollapseAll.click();
+          } else if (action === 'expandAll') {
+            if (btnExpandAll) btnExpandAll.click();
+          } else if (action === 'toggleEditor') {
+            if (btnToggleEditor) btnToggleEditor.click();
+          } else if (action === 'toggleCanvasMode') {
+            if (btnCanvasMode) btnCanvasMode.click();
+          } else if (action === 'toggleMinimap') {
+            const minimapToggle = document.getElementById('minimap-toggle');
+            if (minimapToggle) minimapToggle.click();
+          } else if (action === 'focusMode') {
+            enterFocusMode();
+          } else if (action === 'customizeToolbar') {
+            showToolbarCustomizeDialog();
+          } else if (action === 'manageThemes') {
+            showThemeManagerDialog();
+          } else if (action === 'toggleGrid') {
+            setCanvasGridEnabled(!_gridEnabled);
+            saveSessionCache();
+          } else if (action.startsWith('theme:')) {
+            const theme = action.split(':')[1];
+            if (themeSelect) {
+              themeSelect.value = theme;
+              themeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          } else if (action.startsWith('layout:')) {
+            const layout = action.split(':')[1];
+            if (layoutSelect) {
+              layoutSelect.value = layout;
+              layoutSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }
         });
       });
     }
@@ -748,6 +1074,7 @@
       const file = e.target.files[0];
       if (!file) return;
       currentFileName = file.name;
+      currentFileHandle = null;
       const reader = new FileReader();
       reader.onload = (ev) => {
         editor.value = ev.target.result;
@@ -755,6 +1082,7 @@
         performUpdate(false);
         requestAnimationFrame(() => { Interactions.fitToView(currentRoot); saveSessionCache(); });
         markClean();
+        stopExternalChangeCheck();
       };
       reader.readAsText(file);
       fileInput.value = '';
@@ -766,6 +1094,13 @@
     });
 
     window.addEventListener('keydown', (e) => {
+      // Ctrl+Shift+F / Cmd+Shift+F 进入专注模式（不受焦点限制）
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        enterFocusMode();
+        return;
+      }
+
       if (CanvasEditor.isEditing()) return;
       if (e.target.tagName === 'TEXTAREA') return;
 
@@ -795,7 +1130,7 @@
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
         e.preventDefault();
-        fileInput.click();
+        openFile();
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
         if (document.activeElement === editor) return;
@@ -805,6 +1140,10 @@
           // handled via canvas editor in future
         }
       }
+    });
+
+    window.addEventListener('focus', () => {
+      if (currentFileHandle) checkExternalChange();
     });
 
     window.addEventListener('dragover', (e) => {
@@ -818,6 +1157,7 @@
       if (!file) return;
       if (!file.name.match(/\.(md|markdown|txt)$/i)) return;
       currentFileName = file.name;
+      currentFileHandle = null;
       const reader = new FileReader();
       reader.onload = (ev) => {
         editor.value = ev.target.result;
@@ -825,9 +1165,22 @@
         performUpdate(false);
         requestAnimationFrame(() => { Interactions.fitToView(currentRoot); saveSessionCache(); });
         markClean();
+        stopExternalChangeCheck();
       };
       reader.readAsText(file);
     });
+  }
+
+  function updateCanvasModeButton() {
+    if (!btnCanvasMode) return;
+    const mode = typeof Interactions !== 'undefined' && Interactions.getCanvasMode ? Interactions.getCanvasMode() : 'marquee';
+    if (mode === 'pan') {
+      btnCanvasMode.textContent = '✥';
+      btnCanvasMode.title = '当前：拖拽画布。点击切换为框选模式';
+    } else {
+      btnCanvasMode.textContent = '▣';
+      btnCanvasMode.title = '当前：框选模式。点击切换为拖拽画布模式';
+    }
   }
 
   /**
@@ -840,7 +1193,7 @@
     const md = editor.value;
     const newRoot = MarkdownParser.parse(md);
 
-    tagNodeTypes(newRoot, md);
+    tagNodeTypes(newRoot);
 
     if (currentRoot) {
       MarkdownParser.transferState(currentRoot, newRoot);
@@ -890,26 +1243,299 @@
   }
 
   /**
-   * Tag each node with _type ('heading' or 'list-item') and _indent
-   * so we can reconstruct the markdown faithfully.
+   * Tag every node as a heading. (After the parser refactor every node in the
+   * tree is derived from a markdown heading; list / code / paragraph content
+   * lives inside `node.body`.)
    */
-  function tagNodeTypes(root, md) {
-    const lines = md.split('\n');
+  function tagNodeTypes(root /*, md */) {
     const allNodes = MarkdownParser.flatten(root);
-
     for (const node of allNodes) {
-      if (node.line !== undefined && node.line < lines.length) {
-        const line = lines[node.line];
-        if (line.match(/^\s*[-*+]\s+/)) {
-          node._type = 'list-item';
-          const indentMatch = line.match(/^(\s*)/);
-          node._indent = indentMatch ? Math.floor(indentMatch[1].length / 2) : 0;
-        } else {
-          node._type = 'heading';
+      node._type = 'heading';
+    }
+  }
+
+  function createDefaultCustomColors() {
+    return {
+      mode: 'levels',
+      canvasBg: '#0f1117',
+      editorBg: '#161822',
+      linkColor: '#3a4a7a',
+      nodeUniformFill: '#6c8cff',
+      nodeUniformBorder: '#6c8cff',
+      nodeRootFill: '#6c8cff',
+      nodeRootBorder: '#6c8cff',
+      nodeL1Fill: '#2a3a6e',
+      nodeL1Border: '#6c8cff',
+      nodeL2Fill: '#1e2540',
+      nodeL2Border: '#6c8cff',
+      nodeLeafFill: '#0f1117',
+      nodeLeafBorder: '#6c8cff',
+    };
+  }
+
+  function applyCustomColors() {
+    if (!customColors) return;
+    const root = document.documentElement;
+    root.style.setProperty('--canvas-bg', customColors.canvasBg);
+    if (customColors.editorBg) {
+      root.style.setProperty('--bg-editor', customColors.editorBg);
+    }
+    root.style.setProperty('--link-color', customColors.linkColor);
+    root.style.setProperty('--link-highlight', customColors.linkColor);
+
+    if (customColors.mode === 'uniform') {
+      const fill = customColors.nodeUniformFill;
+      const border = customColors.nodeUniformBorder;
+      root.style.setProperty('--node-root-bg', fill);
+      root.style.setProperty('--node-l1-bg', fill);
+      root.style.setProperty('--node-l2-bg', fill);
+      root.style.setProperty('--node-leaf-bg', fill);
+      root.style.setProperty('--node-root-border', border);
+      root.style.setProperty('--node-l1-border', border);
+      root.style.setProperty('--node-l2-border', border);
+      root.style.setProperty('--node-leaf-border', border);
+    } else {
+      root.style.setProperty('--node-root-bg', customColors.nodeRootFill);
+      root.style.setProperty('--node-l1-bg', customColors.nodeL1Fill);
+      root.style.setProperty('--node-l2-bg', customColors.nodeL2Fill);
+      root.style.setProperty('--node-leaf-bg', customColors.nodeLeafFill);
+      root.style.setProperty('--node-root-border', customColors.nodeRootBorder);
+      root.style.setProperty('--node-l1-border', customColors.nodeL1Border);
+      root.style.setProperty('--node-l2-border', customColors.nodeL2Border);
+      root.style.setProperty('--node-leaf-border', customColors.nodeLeafBorder);
+    }
+  }
+
+  function clearCustomColors() {
+    const root = document.documentElement;
+    const props = [
+      '--canvas-bg',
+      '--bg-editor',
+      '--link-color',
+      '--link-highlight',
+      '--node-root-bg',
+      '--node-l1-bg',
+      '--node-l2-bg',
+      '--node-leaf-bg',
+      '--node-root-border',
+      '--node-l1-border',
+      '--node-l2-border',
+      '--node-leaf-border',
+    ];
+    for (const p of props) {
+      root.style.removeProperty(p);
+    }
+  }
+
+  function openColorPanel() {
+    if (!customColors) return;
+    if (!colorPanelEl) {
+      colorPanelEl = buildColorPanelElement();
+      document.addEventListener('click', handleDocumentClickForColorPanel);
+    }
+    if (!document.body.contains(colorPanelEl)) {
+      document.body.appendChild(colorPanelEl);
+    }
+    syncColorPanelFromState();
+    updateColorPanelModeVisibility();
+  }
+
+  function closeColorPanel() {
+    if (colorPanelEl && document.body.contains(colorPanelEl)) {
+      colorPanelEl.remove();
+    }
+  }
+
+  function handleDocumentClickForColorPanel(e) {
+    if (!colorPanelEl || !document.body.contains(colorPanelEl)) return;
+    if (colorPanelEl.contains(e.target)) return;
+    if (btnColorSettings && btnColorSettings.contains(e.target)) return;
+    closeColorPanel();
+  }
+
+  function buildColorPanelElement() {
+    const panel = document.createElement('div');
+    panel.className = 'mm-color-panel';
+    panel.innerHTML = `
+      <button type="button" class="mm-color-panel-close" aria-label="关闭">×</button>
+      <div class="mm-color-panel-title">配色设置</div>
+      <div class="mm-color-panel-subtitle">仅编辑当前配色方案的配色。新建 / 删除配色方案请在「配色方案管理」中完成。</div>
+      <div class="mm-color-panel-mode">
+        <span>节点模式：</span>
+        <label><input type="radio" name="mm-color-mode" value="uniform"> 统一</label>
+        <label><input type="radio" name="mm-color-mode" value="levels"> 按层级</label>
+      </div>
+      <div class="mm-color-panel-row">
+        <label>画布背景</label>
+        <input type="color" data-mm-color="canvasBg">
+      </div>
+      <div class="mm-color-panel-row">
+        <label>编辑器背景</label>
+        <input type="color" data-mm-color="editorBg">
+      </div>
+      <div class="mm-color-panel-row">
+        <label>连接线</label>
+        <input type="color" data-mm-color="linkColor">
+      </div>
+      <div class="mm-color-panel-section" data-mm-section="uniform">
+        <div class="mm-color-panel-subtitle">统一节点颜色</div>
+        <div class="mm-color-panel-row">
+          <label>填充</label>
+          <input type="color" data-mm-color="nodeUniformFill">
+        </div>
+        <div class="mm-color-panel-row">
+          <label>边框</label>
+          <input type="color" data-mm-color="nodeUniformBorder">
+        </div>
+      </div>
+      <div class="mm-color-panel-section" data-mm-section="levels">
+        <div class="mm-color-panel-subtitle">按层级设置</div>
+        <div class="mm-color-panel-row">
+          <label>根节点填充</label>
+          <input type="color" data-mm-color="nodeRootFill">
+        </div>
+        <div class="mm-color-panel-row">
+          <label>根节点边框</label>
+          <input type="color" data-mm-color="nodeRootBorder">
+        </div>
+        <div class="mm-color-panel-row">
+          <label>一级填充</label>
+          <input type="color" data-mm-color="nodeL1Fill">
+        </div>
+        <div class="mm-color-panel-row">
+          <label>一级边框</label>
+          <input type="color" data-mm-color="nodeL1Border">
+        </div>
+        <div class="mm-color-panel-row">
+          <label>二级填充</label>
+          <input type="color" data-mm-color="nodeL2Fill">
+        </div>
+        <div class="mm-color-panel-row">
+          <label>二级边框</label>
+          <input type="color" data-mm-color="nodeL2Border">
+        </div>
+        <div class="mm-color-panel-row">
+          <label>叶子填充</label>
+          <input type="color" data-mm-color="nodeLeafFill">
+        </div>
+        <div class="mm-color-panel-row">
+          <label>叶子边框</label>
+          <input type="color" data-mm-color="nodeLeafBorder">
+        </div>
+      </div>
+    `;
+
+    panel.addEventListener('click', (e) => e.stopPropagation());
+
+    const btnClose = panel.querySelector('.mm-color-panel-close');
+    if (btnClose) {
+      btnClose.addEventListener('click', () => {
+        closeColorPanel();
+      });
+    }
+
+    panel.querySelectorAll('input[name="mm-color-mode"]').forEach((input) => {
+      input.addEventListener('change', (e) => {
+        const value = e.target.value === 'uniform' ? 'uniform' : 'levels';
+        if (!customColors) customColors = createDefaultCustomColors();
+        customColors.mode = value;
+        updateColorPanelModeVisibility();
+        applyCustomColors();
+        performUpdate(false);
+        saveSessionCache();
+      });
+    });
+
+    panel.querySelectorAll('input[type="color"][data-mm-color]').forEach((input) => {
+      input.addEventListener('input', (e) => {
+        const key = e.target.getAttribute('data-mm-color');
+        if (!key) return;
+        if (!customColors) customColors = createDefaultCustomColors();
+        customColors[key] = e.target.value;
+        applyCustomColors();
+        persistActiveCustomThemeColors();
+        performUpdate(false);
+        saveSessionCache();
+      });
+    });
+
+    // 旧的「保存/删除方案」相关事件在配色方案管理中统一处理，这里不再挂载
+
+    return panel;
+  }
+
+  /** 将当前 customColors 写回正在编辑的自定义配色方案（如果有） */
+  function persistActiveCustomThemeColors() {
+    if (!_activeCustomThemeId || !customColors) return;
+    const list = loadCustomThemes();
+    const idx = list.findIndex((s) => s.id === _activeCustomThemeId);
+    if (idx === -1) return;
+    list[idx] = {
+      id: list[idx].id,
+      name: list[idx].name,
+      colors: JSON.parse(JSON.stringify(customColors)),
+    };
+    saveCustomThemes(list);
+  }
+
+  /** 针对指定自定义配色方案，打开配色面板进行编辑 */
+  function editThemeColors(themeId) {
+    const list = loadCustomThemes();
+    const scheme = list.find((s) => s.id === themeId);
+    if (!scheme) return; // 不自动创建，必须是已存在的自定义配色方案
+    _activeCustomThemeId = themeId;
+    customColors = JSON.parse(JSON.stringify(scheme.colors));
+    document.documentElement.setAttribute('data-theme', '');
+    applyCustomColors();
+    if (themeSelect) {
+      themeSelect.value = 'custom:' + themeId;
+    }
+    openColorPanel();
+  }
+
+  function syncColorPanelFromState() {
+    if (!colorPanelEl || !customColors) return;
+    const modeValue = customColors.mode === 'uniform' ? 'uniform' : 'levels';
+    const modeInput = colorPanelEl.querySelector(`input[name="mm-color-mode"][value="${modeValue}"]`);
+    if (modeInput) modeInput.checked = true;
+
+    const mapping = [
+      'canvasBg',
+      'editorBg',
+      'linkColor',
+      'nodeUniformFill',
+      'nodeUniformBorder',
+      'nodeRootFill',
+      'nodeRootBorder',
+      'nodeL1Fill',
+      'nodeL1Border',
+      'nodeL2Fill',
+      'nodeL2Border',
+      'nodeLeafFill',
+      'nodeLeafBorder',
+    ];
+    mapping.forEach((key) => {
+      const input = colorPanelEl.querySelector(`input[data-mm-color="${key}"]`);
+      if (input && typeof customColors[key] === 'string') {
+        try {
+          input.value = customColors[key];
+        } catch (_) {
+          // ignore invalid color for input[type=color]
         }
-      } else {
-        node._type = node._type || 'heading';
       }
+    });
+  }
+
+  function updateColorPanelModeVisibility() {
+    if (!colorPanelEl || !customColors) return;
+    const modeValue = customColors.mode === 'uniform' ? 'uniform' : 'levels';
+    const uniformSection = colorPanelEl.querySelector('[data-mm-section="uniform"]');
+    const levelsSection = colorPanelEl.querySelector('[data-mm-section="levels"]');
+    if (uniformSection) {
+      uniformSection.classList.toggle('is-hidden', modeValue !== 'uniform');
+    }
+    if (levelsSection) {
+      levelsSection.classList.toggle('is-hidden', modeValue !== 'levels');
     }
   }
 
@@ -922,8 +1548,296 @@
     }
   }
 
+  function startExternalChangeCheck() {
+    stopExternalChangeCheck();
+    if (!currentFileHandle) return;
+    _externalChangeCheckTimer = setInterval(checkExternalChange, EXTERNAL_CHANGE_CHECK_INTERVAL);
+  }
+
+  function stopExternalChangeCheck() {
+    if (_externalChangeCheckTimer) {
+      clearInterval(_externalChangeCheckTimer);
+      _externalChangeCheckTimer = null;
+    }
+  }
+
+  async function checkExternalChange() {
+    if (!currentFileHandle || _externalChangeDialogOpen) return;
+    try {
+      const file = await currentFileHandle.getFile();
+      const diskContent = await file.text();
+      if (diskContent === _savedContent) return;
+      stopExternalChangeCheck();
+      _externalChangeDialogOpen = true;
+      showExternalChangeDialog(diskContent);
+    } catch (_) { /* 无权限或文件不可用 */ }
+  }
+
+  function showExternalChangeDialog(diskContent) {
+    const overlay = document.createElement('div');
+    overlay.className = 'mm-external-change-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'mm-external-change-title');
+    const msg = _dirty
+      ? '该文件已被其他程序修改，且当前有未保存的修改。请选择：'
+      : '该文件已被其他程序修改。请选择：';
+    overlay.innerHTML = `
+      <div class="mm-external-change-dialog">
+        <p id="mm-external-change-title" class="mm-external-change-title">${msg}</p>
+        <div class="mm-external-change-actions">
+          <button type="button" data-action="reload">重新加载</button>
+          <button type="button" data-action="overwrite">用当前内容覆盖</button>
+          <button type="button" data-action="cancel">取消</button>
+        </div>
+      </div>`;
+    const style = document.createElement('style');
+    style.textContent = `
+      .mm-external-change-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:9999; }
+      .mm-external-change-dialog { background:var(--bg, #fff); padding:1.25rem; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.15); max-width:420px; }
+      .mm-external-change-title { margin:0 0 1rem; font-size:0.95rem; line-height:1.4; color:var(--text, #333); }
+      .mm-external-change-actions { display:flex; gap:0.5rem; flex-wrap:wrap; }
+      .mm-external-change-actions button { padding:0.4rem 0.75rem; border-radius:4px; border:1px solid var(--border, #ccc); background:var(--bg, #fff); cursor:pointer; font-size:0.9rem; }
+      .mm-external-change-actions button[data-action="reload"] { background:var(--accent, #2563eb); color:#fff; border-color:var(--accent, #2563eb); }
+      .mm-external-change-actions button:hover { opacity:0.9; }
+    `;
+    overlay.appendChild(style);
+    document.body.appendChild(overlay);
+
+    function close() {
+      _externalChangeDialogOpen = false;
+      overlay.remove();
+      if (currentFileHandle) startExternalChangeCheck();
+    }
+
+    overlay.querySelector('[data-action="reload"]').addEventListener('click', () => {
+      editor.value = diskContent;
+      _savedContent = diskContent;
+      _dirty = false;
+      updateTitleDirtyIndicator();
+      UndoManager.clear();
+      performUpdate(false);
+      close();
+    });
+    overlay.querySelector('[data-action="overwrite"]').addEventListener('click', () => {
+      saveFile();
+      close();
+    });
+    overlay.querySelector('[data-action="cancel"]').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  }
+
+  function showToolbarCustomizeDialog() {
+    const config = loadToolbarConfig();
+    const overlay = document.createElement('div');
+    overlay.className = 'mm-toolbar-customize-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'mm-toolbar-customize-title');
+    overlay.innerHTML = `
+      <div class="mm-toolbar-customize-dialog">
+        <p id="mm-toolbar-customize-title" class="mm-toolbar-customize-title">选择要在工具栏中显示的按钮：</p>
+        <div class="mm-toolbar-customize-list">
+          <label><input type="checkbox" data-key="center" ${config.center ? 'checked' : ''}> 居中视图按钮</label>
+          <label><input type="checkbox" data-key="fit" ${config.fit ? 'checked' : ''}> 适应画布按钮</label>
+          <label><input type="checkbox" data-key="collapseAll" ${config.collapseAll ? 'checked' : ''}> 全部折叠按钮</label>
+          <label><input type="checkbox" data-key="expandAll" ${config.expandAll ? 'checked' : ''}> 全部展开按钮</label>
+          <label><input type="checkbox" data-key="theme" ${config.theme ? 'checked' : ''}> 配色方案选择器</label>
+          <label><input type="checkbox" data-key="layout" ${config.layout ? 'checked' : ''}> 布局选择器</label>
+          <label><input type="checkbox" data-key="addChild" ${config.addChild ? 'checked' : ''}> 新建子节点按钮</label>
+          <label><input type="checkbox" data-key="addSibling" ${config.addSibling ? 'checked' : ''}> 新建兄弟节点按钮</label>
+          <label><input type="checkbox" data-key="canvasMode" ${config.canvasMode ? 'checked' : ''}> 画布模式按钮</label>
+          <label><input type="checkbox" data-key="toggleEditor" ${config.toggleEditor ? 'checked' : ''}> 显示/隐藏编辑器按钮</label>
+          <label><input type="checkbox" data-key="colorSettings" ${config.colorSettings ? 'checked' : ''}> 配色按钮</label>
+        </div>
+        <div class="mm-toolbar-customize-actions">
+          <button type="button" data-action="reset">恢复默认</button>
+          <div class="mm-toolbar-customize-actions-spacer"></div>
+          <button type="button" data-action="cancel">取消</button>
+          <button type="button" data-action="save">保存</button>
+        </div>
+      </div>`;
+    const style = document.createElement('style');
+    style.textContent = `
+      .mm-toolbar-customize-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; z-index:9999; }
+      .mm-toolbar-customize-dialog { background:var(--bg, #fff); padding:1.25rem 1.5rem; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.15); max-width:420px; width:100%; box-sizing:border-box; }
+      .mm-toolbar-customize-title { margin:0 0 0.75rem; font-size:0.95rem; line-height:1.4; color:var(--text, #333); }
+      .mm-toolbar-customize-list { display:flex; flex-direction:column; gap:0.25rem; margin-bottom:0.75rem; font-size:0.9rem; }
+      .mm-toolbar-customize-list label { display:flex; align-items:center; gap:0.4rem; cursor:pointer; }
+      .mm-toolbar-customize-list input[type="checkbox"] { width:14px; height:14px; }
+      .mm-toolbar-customize-actions { display:flex; align-items:center; gap:0.5rem; margin-top:0.25rem; }
+      .mm-toolbar-customize-actions-spacer { flex:1; }
+      .mm-toolbar-customize-actions button { padding:0.35rem 0.8rem; border-radius:4px; border:1px solid var(--border, #ccc); background:var(--bg, #fff); cursor:pointer; font-size:0.85rem; }
+      .mm-toolbar-customize-actions button[data-action="save"] { background:var(--accent, #2563eb); color:#fff; border-color:var(--accent, #2563eb); }
+      .mm-toolbar-customize-actions button:hover { opacity:0.92; }
+    `;
+    overlay.appendChild(style);
+    document.body.appendChild(overlay);
+
+    function close() {
+      overlay.remove();
+    }
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    const btnCancel = overlay.querySelector('[data-action="cancel"]');
+    const btnSave = overlay.querySelector('[data-action="save"]');
+    const btnReset = overlay.querySelector('[data-action="reset"]');
+
+    if (btnCancel) {
+      btnCancel.addEventListener('click', () => close());
+    }
+    if (btnSave) {
+      btnSave.addEventListener('click', () => {
+        const cfg = loadToolbarConfig();
+        overlay.querySelectorAll('input[type="checkbox"][data-key]').forEach((input) => {
+          const key = input.getAttribute('data-key');
+          if (!key) return;
+          cfg[key] = input.checked;
+        });
+        saveToolbarConfig(cfg);
+        close();
+      });
+    }
+    if (btnReset) {
+      btnReset.addEventListener('click', () => {
+        const cfg = Object.assign({}, DEFAULT_TOOLBAR_CONFIG);
+        saveToolbarConfig(cfg);
+        overlay.querySelectorAll('input[type="checkbox"][data-key]').forEach((input) => {
+          const key = input.getAttribute('data-key');
+          if (!key) return;
+          input.checked = !!cfg[key];
+        });
+      });
+    }
+  }
+
+  function addRecentFile(name, handle) {
+    if (!name || !handle) return;
+    const existingIndex = recentFiles.findIndex((entry) => entry.handle === handle);
+    if (existingIndex !== -1) {
+      recentFiles.splice(existingIndex, 1);
+    }
+    recentFiles.unshift({ name, handle });
+    if (recentFiles.length > RECENT_FILES_LIMIT) {
+      recentFiles.length = RECENT_FILES_LIMIT;
+    }
+    renderRecentFilesMenu();
+  }
+
+  function renderRecentFilesMenu() {
+    if (!menuDropdown || !recentFiles.length) return;
+    const fileParent = menuDropdown.querySelector('.toolbar-menu-parent-wrap');
+    if (!fileParent) return;
+    const submenu = fileParent.querySelector('.toolbar-menu-submenu');
+    if (!submenu) return;
+
+    if (!recentFilesContainer) {
+      const separator = document.createElement('div');
+      separator.className = 'toolbar-menu-separator';
+      submenu.appendChild(separator);
+
+      const header = document.createElement('div');
+      header.className = 'toolbar-menu-recent-header';
+      header.textContent = '最近文件';
+      submenu.appendChild(header);
+
+      const container = document.createElement('div');
+      container.className = 'toolbar-menu-recent-list';
+      recentFilesContainer = container;
+      submenu.appendChild(container);
+    }
+
+    recentFilesContainer.innerHTML = '';
+
+    recentFiles.forEach((entry, index) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toolbar-menu-item';
+      btn.setAttribute('data-action', 'openRecent');
+      btn.setAttribute('data-index', String(index));
+      btn.textContent = entry.name;
+      btn.title = entry.name;
+      btn.addEventListener('click', () => {
+        menuDropdown.classList.remove('is-open');
+        menuDropdown.setAttribute('aria-hidden', 'true');
+        openRecentFile(index);
+      });
+      recentFilesContainer.appendChild(btn);
+    });
+
+    if (!recentFiles.length) {
+      const empty = document.createElement('div');
+      empty.className = 'toolbar-menu-recent-empty';
+      empty.textContent = '暂无最近文件';
+      recentFilesContainer.appendChild(empty);
+    }
+  }
+
+  async function loadFileFromHandle(handle) {
+    const file = await handle.getFile();
+    const text = await file.text();
+    currentFileName = file.name;
+    currentFileHandle = handle;
+    editor.value = text;
+    _savedContent = text;
+    _dirty = false;
+    updateTitleDirtyIndicator();
+    UndoManager.clear();
+    performUpdate(false);
+    requestAnimationFrame(() => { Interactions.fitToView(currentRoot); saveSessionCache(); });
+    startExternalChangeCheck();
+  }
+
+  async function openRecentFile(index) {
+    const entry = recentFiles[index];
+    if (!entry || !entry.handle) return;
+    try {
+      await loadFileFromHandle(entry.handle);
+    } catch (e) {
+      if (typeof console !== 'undefined' && console.error) console.error(e);
+      if (typeof alert === 'function') alert('无法重新打开该文件，请使用“打开”重新选择。');
+      recentFiles.splice(index, 1);
+      renderRecentFilesMenu();
+    }
+  }
+
+  async function openFile() {
+    if (window.showOpenFilePicker) {
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          types: [{ description: 'Markdown 文件', accept: { 'text/markdown': ['.md', '.markdown', '.txt'] } }],
+          multiple: false,
+        });
+        await loadFileFromHandle(handle);
+        addRecentFile(currentFileName, handle);
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+    fileInput.click();
+  }
+
   async function saveFile() {
     const content = editor.value;
+
+    if (currentFileHandle) {
+      try {
+        const writable = await currentFileHandle.createWritable();
+        await writable.write(content);
+        await writable.close();
+        currentFileName = currentFileHandle.name;
+        markClean();
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        currentFileHandle = null;
+        stopExternalChangeCheck();
+      }
+    }
 
     if (window.showSaveFilePicker) {
       try {
@@ -938,6 +1852,7 @@
         await writable.write(content);
         await writable.close();
         currentFileName = handle.name;
+        currentFileHandle = handle;
         markClean();
         return;
       } catch (e) {
@@ -970,7 +1885,9 @@
         await writable.write(content);
         await writable.close();
         currentFileName = handle.name;
+        currentFileHandle = handle;
         markClean();
+        addRecentFile(currentFileName, handle);
         return;
       } catch (e) {
         if (e.name === 'AbortError') return;

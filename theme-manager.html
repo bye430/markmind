@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MarkMind — 配色方案管理</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="mm-theme-manager-body">
+  <div class="mm-theme-manager-shell">
+    <header class="mm-theme-manager-header">
+      <div class="mm-theme-manager-header-left">
+        <button type="button" id="btn-tm-back" class="mm-tm-btn mm-tm-btn-ghost">← 返回</button>
+      </div>
+      <div class="mm-theme-manager-header-center">
+        <span class="mm-theme-manager-title">配色方案管理</span>
+        <span class="mm-theme-manager-subtitle">新建 / 删除自定义配色方案，并调整每个配色方案的配色方案</span>
+      </div>
+      <div class="mm-theme-manager-header-right">
+        <span class="mm-theme-manager-logo">◎ MarkMind</span>
+      </div>
+    </header>
+
+    <main class="mm-theme-manager-main">
+      <section class="mm-theme-manager-sidebar">
+        <div class="mm-tm-section-title">自定义配色方案</div>
+        <div class="mm-tm-theme-list" id="tm-theme-list"></div>
+        <button type="button" id="btn-tm-new" class="mm-tm-btn mm-tm-btn-primary">＋ 新建配色方案</button>
+        <button type="button" id="btn-tm-delete" class="mm-tm-btn mm-tm-btn-danger" disabled>删除所选配色方案</button>
+      </section>
+
+      <section class="mm-theme-manager-editor">
+        <div class="mm-tm-editor-empty" id="tm-editor-empty">
+          还没有自定义配色方案，请先在左侧新建一个。
+        </div>
+
+        <div class="mm-tm-editor-panel" id="tm-editor-panel" hidden>
+          <div class="mm-tm-field-row">
+            <label for="tm-theme-name">配色方案名称</label>
+            <input id="tm-theme-name" type="text" autocomplete="off" />
+          </div>
+
+          <div class="mm-tm-field-row">
+            <label>节点配色模式</label>
+            <div class="mm-tm-radio-group">
+              <label><input type="radio" name="tm-mode" value="uniform"> 统一</label>
+              <label><input type="radio" name="tm-mode" value="levels"> 按层级</label>
+            </div>
+          </div>
+
+          <div class="mm-tm-color-grid">
+            <div class="mm-tm-color-row">
+              <label>画布背景</label>
+              <input type="color" data-tm-color="canvasBg">
+            </div>
+            <div class="mm-tm-color-row">
+              <label>编辑器背景</label>
+              <input type="color" data-tm-color="editorBg">
+            </div>
+            <div class="mm-tm-color-row">
+              <label>连接线</label>
+              <input type="color" data-tm-color="linkColor">
+            </div>
+          </div>
+
+          <div class="mm-tm-section-split">
+            <div class="mm-tm-section-caption">统一节点颜色（当模式为“统一”时生效）</div>
+            <div class="mm-tm-color-grid">
+              <div class="mm-tm-color-row">
+                <label>节点填充</label>
+                <input type="color" data-tm-color="nodeUniformFill">
+              </div>
+              <div class="mm-tm-color-row">
+                <label>节点边框</label>
+                <input type="color" data-tm-color="nodeUniformBorder">
+              </div>
+            </div>
+          </div>
+
+          <div class="mm-tm-section-split">
+            <div class="mm-tm-section-caption">按层级设置（当模式为“按层级”时生效）</div>
+            <div class="mm-tm-color-grid mm-tm-color-grid-two-cols">
+              <div class="mm-tm-color-row">
+                <label>根节点填充</label>
+                <input type="color" data-tm-color="nodeRootFill">
+              </div>
+              <div class="mm-tm-color-row">
+                <label>根节点边框</label>
+                <input type="color" data-tm-color="nodeRootBorder">
+              </div>
+              <div class="mm-tm-color-row">
+                <label>一级填充</label>
+                <input type="color" data-tm-color="nodeL1Fill">
+              </div>
+              <div class="mm-tm-color-row">
+                <label>一级边框</label>
+                <input type="color" data-tm-color="nodeL1Border">
+              </div>
+              <div class="mm-tm-color-row">
+                <label>二级填充</label>
+                <input type="color" data-tm-color="nodeL2Fill">
+              </div>
+              <div class="mm-tm-color-row">
+                <label>二级边框</label>
+                <input type="color" data-tm-color="nodeL2Border">
+              </div>
+              <div class="mm-tm-color-row">
+                <label>叶子填充</label>
+                <input type="color" data-tm-color="nodeLeafFill">
+              </div>
+              <div class="mm-tm-color-row">
+                <label>叶子边框</label>
+                <input type="color" data-tm-color="nodeLeafBorder">
+              </div>
+            </div>
+          </div>
+
+          <div class="mm-tm-footer">
+            <button type="button" id="btn-tm-confirm" class="mm-tm-btn mm-tm-btn-primary-wide">
+              确认保存
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="theme-manager.js"></script>
+</body>
+</html>
+
